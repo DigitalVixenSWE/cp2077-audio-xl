@@ -115,6 +115,7 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow) {
     slot->loop = spec->loop;
     slot->rate = spec->rate > 0.0f ? spec->rate : 1.0;
     slot->fadeInFrames = spec->fadeIn > 0.0f ? spec->fadeIn * rateHz : 0.0;
+    slot->maxFrames = spec->maxDuration > 0.0f ? static_cast<uint64_t>(spec->maxDuration * rateHz) : 0;
     if (spec->start > 0.0f) slot->startFrame = std::min(total, static_cast<uint32_t>(spec->start * rateHz));
     if (spec->end > 0.0f) slot->endFrame = std::min(total, static_cast<uint32_t>(spec->end * rateHz));
     if (slot->endFrame <= slot->startFrame) {
@@ -164,6 +165,12 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
   auto& ctl = m_rows[v.row];
 
   const uint32_t gen = ctl.stopGen.load(std::memory_order_acquire);
+  if (!v.stopping && v.maxFrames > 0 && v.rendered >= v.maxFrames) {
+    v.stopping = true;
+    const SoundSpec* spec = reg->SpecForRow(v.row);
+    v.stopFadeFrames = spec && spec->fadeOut > 0.0f ? spec->fadeOut * rateHz : 0.0;
+    v.stopAtRendered = v.rendered;
+  }
   if (!v.stopping && gen != v.stopGen) {
     v.stopping = true;
     v.stopFadeFrames = std::max(0.0, static_cast<double>(ctl.stopFade.load(std::memory_order_relaxed)) * rateHz);

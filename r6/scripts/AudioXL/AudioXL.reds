@@ -8,6 +8,18 @@ import Codeware.Localization.*
 @if(ModuleExists("RedConsole"))
 import RedConsole.*
 
+@if(ModuleExists("RedLogger"))
+import RedLogger.*
+
+public abstract class AudioXLLog {
+  @if(ModuleExists("RedLogger"))
+  public static func Write(line: String) -> Void {
+    RedLog.Append("AudioXL", line);
+  }
+  @if(!ModuleExists("RedLogger"))
+  public static func Write(line: String) -> Void {}
+}
+
 public class AudioXLContribution {
   public let modName: String;
   public let resourcePath: ResRef;
@@ -69,7 +81,7 @@ public abstract class AudioXLAPI {
   public static func Register(modName: String, resource: ResRef, opt listOn: array<String>) -> Void {
     let sys = AudioXLSystem.Get();
     if !IsDefined(sys) {
-      LogChannel(n"DEBUG", s"[AudioXL] too early to register '\(modName)'");
+      AudioXLLog.Write(s"too early to register '\(modName)'");
       return;
     }
     let c = new AudioXLContribution();
@@ -82,7 +94,7 @@ public abstract class AudioXLAPI {
   public static func RegisterBank(name: CName, resource: ResRef, opt resident: Bool) -> Void {
     let sys = AudioXLSystem.Get();
     if !IsDefined(sys) {
-      LogChannel(n"DEBUG", s"[AudioXL] too early to register bank '\(name)'");
+      AudioXLLog.Write(s"too early to register bank '\(name)'");
       return;
     }
     sys.AddBank(name, resource, resident);
@@ -91,7 +103,7 @@ public abstract class AudioXLAPI {
   public static func RegisterEvent(name: CName) -> Void {
     let sys = AudioXLSystem.Get();
     if !IsDefined(sys) {
-      LogChannel(n"DEBUG", s"[AudioXL] too early to register event '\(name)'");
+      AudioXLLog.Write(s"too early to register event '\(name)'");
       return;
     }
     sys.AddEvent(name, AudioXLNative.WwiseId(name));
@@ -101,7 +113,7 @@ public abstract class AudioXLAPI {
     let gi = GetGameInstance();
     let chosen: CName = AudioXLAPI.ResolveVariant(name, gi);
     if !AudioXLNative.Has(chosen) {
-      LogChannel(n"DEBUG", s"[AudioXL] PlayLine: no row for \(name)");
+      AudioXLLog.Write(s"PlayLine: no row for \(name)");
       return false;
     }
     if EntityID.IsDefined(entityID) {
@@ -178,7 +190,7 @@ public abstract class AudioXLAPI {
   public static func RegisterPatcher(patcher: ref<AudioXLPatcher>) -> Void {
     let sys = AudioXLSystem.Get();
     if !IsDefined(sys) {
-      LogChannel(n"DEBUG", s"[AudioXL] too early to register patcher '\(patcher.Name())'");
+      AudioXLLog.Write(s"too early to register patcher '\(patcher.Name())'");
       return;
     }
     sys.AddPatcher(patcher);
@@ -204,7 +216,7 @@ public class AudioXLSystem extends ScriptableService {
 
   private func Note(msg: String) -> Void {
     ArrayPush(this.m_log, msg);
-    LogChannel(n"DEBUG", s"[AudioXL] \(msg)");
+    AudioXLLog.Write(s"\(msg)");
   }
 
   public func Report() -> String {

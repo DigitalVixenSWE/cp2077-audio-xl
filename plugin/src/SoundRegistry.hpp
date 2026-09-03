@@ -26,6 +26,7 @@ struct SoundSpec {
   float end = 0.0f;            
   float rate = 1.0f;           
   bool stream = false;         
+  float maxDuration = 0.0f;    
   std::map<std::string, std::string> subtitles;   
   std::string speaker;         
   bool valid = false;          

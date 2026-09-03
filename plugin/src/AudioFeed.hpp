@@ -36,6 +36,7 @@ class AudioFeed {
     bool loop = false;
     double rate = 1.0;
     double fadeInFrames = 0.0;
+    uint64_t maxFrames = 0;      
   };
 
   struct RowControl {

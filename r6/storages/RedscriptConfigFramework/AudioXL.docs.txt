@@ -20,7 +20,8 @@ Nothing to configure. Install it, then install mods built on it. AudioXL coexist
 [*][url=https://www.nexusmods.com/cyberpunk2077/mods/7780]Codeware[/url][/*]
 [*]Game version 2.31.[/*]
 [/list]
-Optional: my [url=https://www.nexusmods.com/cyberpunk2077/mods/30726]Redscript Configuration Framework[/url], which shows this page in-game.
+Optional: 
+[url=https://www.nexusmods.com/cyberpunk2077/mods/30726]Redscript Configuration Framework[/url] - shows this page in-game.[url=https://www.nexusmods.com/cyberpunk2077/mods/31920]RedLogger[/url] - for logging.
 
 [b]Install[/b]
 Drop the archive into your mod manager, or extract it into the game folder so that you end up with:
@@ -31,7 +32,11 @@ Mods built on AudioXL put their sounds under:
 [code]Cyberpunk 2077\red4ext\plugins\AudioXL\sounds\<ModName>\[/code]
 
 [b]Uninstall[/b]
-Delete [code]red4ext\plugins\AudioXL[/code] and [code]r6\scripts\AudioXL[/code]. AudioXL keeps nothing in your saves, so it can be added or removed at any point.
+Delete
+[code]red4ext\plugins\AudioXL[/code]
+and
+[code]r6\scripts\AudioXL[/code]
+AudioXL keeps nothing in your saves, so it can be added or removed at any point.
 
 
 [color=#e06666][size=6][b]- For Mod Authors: new sounds -[/b][/size][/color]
@@ -74,6 +79,7 @@ loop      true/false                 rate      playback rate, 0.5 = half speed, 
 fadeIn    seconds                    fadeOut   seconds, applied by AudioXLAPI.Stop
 start     seconds into the file      end       seconds, 0 = to the end
 stream    true = map the file, read it only when it plays
+maxDuration  seconds; the sound ends itself after this even when looping (fades with fadeOut)
 subtitle  text, or { "en-us": "...", "de-de": "..." }     speaker   name shown with the subtitle[/code]
 [/quote]
 
@@ -94,6 +100,7 @@ The [b]mod_sfx_*[/b] types are the game's own; the [b]axl_*[/b] types come with 
 AudioXLAPI.SetGain(n"mymod_pad", 0.5);   // while it plays
 AudioXLAPI.IsPlaying(n"mymod_pad");[/code]
 [/quote]
+A looping sound plays until Stop is called, until its entity despawns, or until its [b]maxDuration[/b] runs out.
 
 [b]Voice lines with subtitles[/b]
 [quote][code]{ "name": "mymod_greeting", "type": "axl_voice_2d", "speaker": "V",
@@ -114,9 +121,9 @@ Does the same as a manifest row, from your own OnLoad.
 
 Footwear sets, weapon sound assignments, vehicle engines, ambients: all of that lives in the cooked audio metadata, and AudioXL merges yours in instead of replacing the file.
 
-[b]Adding records[/b]: open the starter
+[b]Adding records[/b]: grab the [b]Starter Metadata[/b] optional download on this page, a complete footwear set of 19 records with its list-on pairs. Open its
 [code].audio_metadata[/code]
-In WolvenKit, add your records, save it at your own path inside your archive, and register it:
+In WolvenKit, rename the records, point them at your sounds, save it at your own path inside your archive, and register it:
 [quote][code]AudioXLAPI.Register("My Mod", r"mymod\\sound\\metadata\\records.audio_metadata",
                     ["lcm_footsteps_concrete=lcm_concrete_mymod"]);[/code]
 [/quote]
@@ -144,6 +151,24 @@ Run the included generator on that file. It diffs it against vanilla and writes 
 [*]Delete the REDmod folder from your package. Your users will no longer need REDmod.[/*]
 [/list]
 I've tested this approach on the mod [url=https://www.nexusmods.com/cyberpunk2077/mods/17542]The Loudening[/url] in my own setup. 30 record edits and 490 custom sounds and it works great! I've also reached out to the author of the mod but have had no response yet, so I cannot upload this work here.
+
+
+[color=#e06666][size=6][b]- Migrating to AudioXL -[/b][/size][/color]
+
+Migrating Audioware mods should be fairly easy:
+[list]
+[*]The YAML manifest becomes a sounds.json. [b]sfx[/b] entries are rows with a gain; [b]volume[/b] becomes [b]gain[/b], [b]loop[/b] stays [b]loop[/b], fade tweens become [b]fadeIn[/b] / [b]fadeOut[/b]. mp3, ogg and flac files stay as they are.[/*]
+[*][b]voices[/b] with fem / male takes become one row with a gendered [b]file[/b] and a [b]subtitle[/b]; the mute placeholder files go away. Play them with AudioXLAPI.PlayLine.[/*]
+[*]Spatial emitters need no registration. Post the sound on the entity with the vanilla AudioSystem.Play(name, entityID, emitterName) and give the row an occlusion type; the vehicle or NPC is already a Wwise object, and the sound ends when it despawns.[/*]
+[*]Stop is AudioXLAPI.Stop(name, fadeOut); live volume is AudioXLAPI.SetGain.[/*]
+[*]Gate your calls on @if(ModuleExists("AudioXL")).[/*]
+[/list]
+
+
+[color=#e06666][size=6][b]- Updates -[/b][/size][/color]
+
+[i][u]0.1.1[/u][/i] - maxDuration row field. RedLogger made optional dep.
+[i][u]0.1.0[/u][/i] - Initial release.
 
 
 [color=#e06666][size=6][b]- Known Limits -[/b][/size][/color]

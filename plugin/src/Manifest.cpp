@@ -67,6 +67,7 @@ bool RowToSpec(const JsonValue& aRow, const fs::path& aDir, SoundSpec& aOut, std
   aOut.end = static_cast<float>(aRow.GetNumber("end", 0.0));
   aOut.rate = static_cast<float>(aRow.GetNumber("rate", 1.0));
   aOut.stream = aRow.GetBool("stream", false);
+  aOut.maxDuration = static_cast<float>(aRow.GetNumber("maxDuration", 0.0));
   if (aOut.gain < 0.0f) aOut.gain = 0.0f;
   if (aOut.rate <= 0.0f) aOut.rate = 1.0f;
   return true;
