@@ -24,6 +24,8 @@ EVENTS = {
     "axl_radioport_2d": (None, "radio.bnk:0da4f800"),
     "axl_sfx_2d":    (0x17705D3E, "custom_sound_test"),
     "axl_master_2d": (0xE2B7BC37, "custom_sound_test"),
+    "axl_radio_3d":     (None, "radio.bnk:09a3a81e"),
+    "axl_radio_veh3d":  (None, "radio.bnk:222a783c"),
 }
 TEMPLATE_EVENT_IDS = {"custom_sound_test": 0x4BA03A92, "mod_sfx_2d": 0x045845C4}
 

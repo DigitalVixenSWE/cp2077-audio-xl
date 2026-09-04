@@ -22,7 +22,7 @@ cmake -S . -B build -A x64
 cmake --build build --config Release --parallel
 ```
 
-The DLL goes to `red4ext/plugins/AudioXL/AudioXL.dll`. Built for game version 2.31; the plugin disables itself on any other build.
+The DLL goes to `red4ext/plugins/AudioXL/AudioXL.dll`. Engine addresses are resolved at load through RED4ext from the game's own `cyberpunk2077_addresses.json` (hash list), so they follow game patches; struct layouts were reverse-engineered on 2.31, and an untested build runs with a warning in the log. A build missing any symbol disables the plugin and names the symbol in its status.
 
 ## Requirements
 

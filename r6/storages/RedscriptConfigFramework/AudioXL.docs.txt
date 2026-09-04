@@ -131,7 +131,7 @@ The list pairs put a footwear record on a material; a footwear record is inert u
 
 [b]Editing vanilla records[/b]: subclass
 [code]AudioXLPatcher[/code]
-Edit typed fields in Apply, register it. A generator is included for the common case: point it at a modified metadata export and it writes the patcher for you.
+Edit typed fields in Apply, register it. Phantom Liberty keeps its records in a second metadata resource, so those edits go in ApplyEP1 instead; it is skipped when EP1 is not installed. A generator is included for the common case: point it at a modified metadata export and it writes the patcher for you.
 
 
 [color=#e06666][size=6][b]- Converting a REDmod sound mod -[/b][/size][/color]
@@ -147,10 +147,11 @@ Folder, unchanged, into:
 AudioXL reads REDmod's format as-is: name, type, file, gain, pitch.[/*]
 [*]If the mod also replaced:
 [code]cooked_metadata.audio_metadata[/code]
-Run the included generator on that file. It diffs it against vanilla and writes a RedScript patcher with every record edit, which you ship as a script.[/*]
+Run the included generator on that file. It diffs it against vanilla and writes a RedScript patcher with every record edit, which you ship as a script. Pass the EP1 copy too if the archive carries one.
+Read the record list it prints before you ship it. --exclude leaves a record out should you need it.[/*]
 [*]Delete the REDmod folder from your package. Your users will no longer need REDmod.[/*]
 [/list]
-I've tested this approach on the mod [url=https://www.nexusmods.com/cyberpunk2077/mods/17542]The Loudening[/url] in my own setup. 30 record edits and 490 custom sounds and it works great! I've also reached out to the author of the mod but have had no response yet, so I cannot upload this work here.
+I've tested this approach on the mod [url=https://www.nexusmods.com/cyberpunk2077/mods/17542]The Loudening[/url] in my own setup. 33 record edits and 490 custom sounds and it works great! Its archive turned out to carry three edits that have nothing to do with weapons, so those got left out. I've also reached out to the author of the mod but have had no response yet, so I cannot upload this work here.
 
 
 [color=#e06666][size=6][b]- Migrating to AudioXL -[/b][/size][/color]
@@ -167,6 +168,9 @@ Migrating Audioware mods should be fairly easy:
 
 [color=#e06666][size=6][b]- Updates -[/b][/size][/color]
 
+[i][u]0.1.4[/u][/i] - Repackage. The 0.1.2 and 0.1.3 accidentally got the wrong plugin, but no functional difference.
+[i][u]0.1.3[/u][/i] - Patchers reach Phantom Liberty records through ApplyEP1. Generator takes an EP1 pair and an exclude list. Fixed a startup crash: one engine address hash is shared by two different symbols, so it now prefers the known address on 2.31 and warns when the two disagree.
+[i][u]0.1.2[/u][/i] - Engine addresses resolved through the game's address hash list (RED4ext) instead of hardcoded 2.31 offsets.
 [i][u]0.1.1[/u][/i] - maxDuration row field. RedLogger made optional dep.
 [i][u]0.1.0[/u][/i] - Initial release.
 

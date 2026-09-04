@@ -71,9 +71,13 @@ public abstract class AudioXLPatcher {
   
   public let applied: Int32;
   public let missed: Int32;
+  public let appliedEP1: Int32;
+  public let missedEP1: Int32;
 
   public func Name() -> String { return "unnamed patcher"; }
   public func Apply(md: ref<audioCookedMetadataResource>) -> Void {}
+  
+  public func ApplyEP1(md: ref<audioCookedMetadataResource>) -> Void {}
 }
 
 public abstract class AudioXLAPI {
@@ -201,13 +205,16 @@ public class AudioXLSystem extends ScriptableService {
 
   private let m_pending: array<ref<AudioXLContribution>>;
   private let m_cooked: ref<audioCookedMetadataResource>;
+  private let m_cookedEP1: ref<audioCookedMetadataResource>;
   private let m_tokens: array<ref<ResourceToken>>;
   private let m_log: array<String>;
   private let m_patchers: array<ref<AudioXLPatcher>>;
   private let m_banks: array<ref<AudioXLBank>>;
   private let m_events: array<ref<AudioXLEvent>>;
   private let m_eventTable: ref<audioAudioEventArray>;
+  
   private let m_patched: Int32;
+  private let m_patchedEP1: Int32;
 
   public static func Get() -> ref<AudioXLSystem> {
     return GameInstance.GetScriptableServiceContainer()
@@ -275,6 +282,13 @@ public class AudioXLSystem extends ScriptableService {
     } else {
       this.Note("  WARNING: could not request the base metadata");
     }
+
+    let e1 = GameInstance.GetResourceDepot()
+      .LoadResource(r"ep1\\sound\\metadata\\cooked_metadata.audio_metadata");
+    if IsDefined(e1) {
+      ArrayPush(this.m_tokens, e1);
+      e1.RegisterCallback(this, n"OnCookedEP1Ready");
+    }
   }
 
   private cb func OnResourceLoad(event: ref<ResourceEvent>) {
@@ -296,7 +310,15 @@ public class AudioXLSystem extends ScriptableService {
       this.Note(s"base metadata via Resource/Load (EARLY path), \(ArraySize(res.entries)) entries");
       this.SpliceReady();
     } else {
-      this.Note(s"ignoring another audioCookedMetadataResource (\(ArraySize(res.entries)) entries)");
+      if Equals(ResRef.GetHash(event.GetPath()),
+                ResRef.GetHash(r"ep1\\sound\\metadata\\cooked_metadata.audio_metadata")) {
+        this.m_cookedEP1 = res;
+        this.Note(s"EP1 metadata via Resource/Load (EARLY path), \(ArraySize(res.entries)) entries");
+        
+        this.RunPatchers();
+      } else {
+        this.Note(s"ignoring another audioCookedMetadataResource (\(ArraySize(res.entries)) entries)");
+      }
     }
   }
 
@@ -312,6 +334,19 @@ public class AudioXLSystem extends ScriptableService {
     this.m_cooked = res;
     this.Note(s"base metadata via TOKEN (late path), \(ArraySize(res.entries)) entries");
     this.SpliceReady();
+  }
+
+  private cb func OnCookedEP1Ready(token: ref<ResourceToken>) {
+    if IsDefined(this.m_cookedEP1) {
+      return;
+    }
+    let res = token.GetResource() as audioCookedMetadataResource;
+    if !IsDefined(res) {
+      return;   
+    }
+    this.m_cookedEP1 = res;
+    this.Note(s"EP1 metadata via TOKEN (late path), \(ArraySize(res.entries)) entries");
+    this.RunPatchers();
   }
 
   private func SpliceReady() -> Void {
@@ -442,20 +477,35 @@ public class AudioXLSystem extends ScriptableService {
     ArrayPush(this.m_patchers, patcher);
     this.Note(s"registered patcher '\(patcher.Name())'");
     
-    if IsDefined(this.m_cooked) {
-      this.RunPatchers();
-    }
+    this.RunPatchers();
   }
 
   private func RunPatchers() -> Void {
-    while this.m_patched < ArraySize(this.m_patchers) {
-      let p = this.m_patchers[this.m_patched];
-      this.m_patched += 1;
-      p.Apply(this.m_cooked);
-      if p.missed > 0 {
-        this.Note(s"  patcher '\(p.Name())': \(p.applied) records edited, \(p.missed) NOT FOUND");
-      } else {
-        this.Note(s"  patcher '\(p.Name())': \(p.applied) records edited");
+    if IsDefined(this.m_cooked) {
+      while this.m_patched < ArraySize(this.m_patchers) {
+        let p = this.m_patchers[this.m_patched];
+        this.m_patched += 1;
+        p.Apply(this.m_cooked);
+        if p.missed > 0 {
+          this.Note(s"  patcher '\(p.Name())': \(p.applied) records edited, \(p.missed) NOT FOUND");
+        } else {
+          this.Note(s"  patcher '\(p.Name())': \(p.applied) records edited");
+        }
+      }
+    }
+    if IsDefined(this.m_cookedEP1) {
+      while this.m_patchedEP1 < ArraySize(this.m_patchers) {
+        let p = this.m_patchers[this.m_patchedEP1];
+        this.m_patchedEP1 += 1;
+        p.ApplyEP1(this.m_cookedEP1);
+        
+        if p.missedEP1 > 0 {
+          this.Note(s"  patcher '\(p.Name())': EP1 \(p.appliedEP1) records edited, \(p.missedEP1) NOT FOUND");
+        } else {
+          if p.appliedEP1 > 0 {
+            this.Note(s"  patcher '\(p.Name())': EP1 \(p.appliedEP1) records edited");
+          }
+        }
       }
     }
   }

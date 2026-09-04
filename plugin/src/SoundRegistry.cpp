@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "AudioFeed.hpp"
+#include "SafeReloc.hpp"
 #include "AudioXLPlugin.hpp"
 #include "Decode.hpp"
 #include "Manifest.hpp"
@@ -18,23 +19,44 @@ namespace AudioXLNS {
 
 namespace {
 
-constexpr uintptr_t kRvaAudioSystem = 0x34389F0;     
-constexpr uintptr_t kRvaTable = 0x3B71070;           
-constexpr uintptr_t kRvaCount = 0x48FFE34;           
-constexpr uintptr_t kRvaNames = 0x48EE910;           
-constexpr uintptr_t kRvaFormats = 0x3A9A790;         
-constexpr uintptr_t kRvaPcm = 0x4919E40;             
-constexpr uintptr_t kRvaFrames = 0x4915E40;          
-constexpr uintptr_t kRvaSlotRow = 0x349CE80;         
-constexpr uintptr_t kRvaSlotPlayingId = 0x349DE80;   
-constexpr uintptr_t kRvaSlotPos = 0x349FE80;         
-constexpr uintptr_t kRvaSlotCount = 0x349AE74;       
-constexpr uintptr_t kRvaTableInit = 0xA2D398;        
-constexpr uintptr_t kRvaSetCallbacks = 0x1A3EAC0;    
-constexpr uintptr_t kRvaRegister = 0x2A3D8F4;        
-constexpr uintptr_t kRvaLoadBankMemoryCopy = 0x1AC7E00; 
-constexpr uintptr_t kRvaExecuteThunk = 0x2A3AF20;    
-constexpr uintptr_t kRvaFormatThunk = 0x2A3AF28;     
+constexpr uint32_t kHashAudioSystem = 1145900717;       
+constexpr uint32_t kHashTable = 3149795782;             
+constexpr uint32_t kHashCount = 3123907440;             
+constexpr uint32_t kHashNames = 1348472600;             
+constexpr uint32_t kHashFormats = 1511855297;           
+constexpr uint32_t kHashPcm = 1690242964;               
+constexpr uint32_t kHashFrames = 667881057;             
+constexpr uint32_t kHashSlotRow = 1197870886;           
+constexpr uint32_t kHashSlotPlayingId = 1753419754;     
+constexpr uint32_t kHashSlotPos = 662572637;            
+constexpr uint32_t kHashSlotCount = 3767733395;         
+constexpr uint32_t kHashTableInit = 1588268905;         
+constexpr uint32_t kHashSetCallbacks = 2060721724;      
+constexpr uint32_t kHashRegister = 1134367812;          
+constexpr uint32_t kHashLoadBankMemoryCopy = 3400209645; 
+constexpr uint32_t kHashExecuteThunk = 810556311;       
+constexpr uint32_t kHashFormatThunk = 1731796044;       
+constexpr uint32_t kHashAudioInit = 651038266;          
+
+constexpr uintptr_t kRvaAudioSystem = 0x34389F0;
+constexpr uintptr_t kRvaTable = 0x3B71070;
+constexpr uintptr_t kRvaCount = 0x48FFE34;
+constexpr uintptr_t kRvaNames = 0x48EE910;
+constexpr uintptr_t kRvaFormats = 0x3A9A790;
+constexpr uintptr_t kRvaPcm = 0x4919E40;
+constexpr uintptr_t kRvaFrames = 0x4915E40;
+constexpr uintptr_t kRvaSlotRow = 0x349CE80;
+constexpr uintptr_t kRvaSlotPlayingId = 0x349DE80;
+constexpr uintptr_t kRvaSlotPos = 0x349FE80;
+constexpr uintptr_t kRvaSlotCount = 0x349AE74;
+constexpr uintptr_t kRvaTableInit = 0xA2D398;
+constexpr uintptr_t kRvaSetCallbacks = 0x1A3EAC0;
+constexpr uintptr_t kRvaRegister = 0x2A3D8F4;
+constexpr uintptr_t kRvaLoadBankMemoryCopy = 0x1AC7E00;
+constexpr uintptr_t kRvaExecuteThunk = 0x2A3AF20;
+constexpr uintptr_t kRvaFormatThunk = 0x2A3AF28;
+constexpr uintptr_t kRvaAudioInit = 0xA2E9FC;
+
 constexpr size_t kOffModdedFlag = 0x140;             
 constexpr uint32_t kTableCapacity = 0x400;
 constexpr uint16_t kMaxRows = 0x1000;
@@ -133,38 +155,62 @@ bool SoundRegistry::Init() {
     return false;
   }
   
-  const bool is231 = sdk->runtime->major == 2 &&
-                     ((sdk->runtime->minor == 3 && sdk->runtime->patch == 1) || sdk->runtime->minor == 31);
-  if (!is231) {
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "unsupported game version %u.%u.%u (built for 2.31)",
-                  static_cast<unsigned>(sdk->runtime->major), static_cast<unsigned>(sdk->runtime->minor),
-                  static_cast<unsigned>(sdk->runtime->patch));
-    m_status = buf;
+  const bool known231 = sdk->runtime->major == 2 &&
+                        ((sdk->runtime->minor == 3 && sdk->runtime->patch == 1) || sdk->runtime->minor == 31);
+  const uintptr_t moduleBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+
+  std::string missing;
+  std::string collisions;
+  const auto resolve = [&](uint32_t aHash, const char* aName, uintptr_t aRva2_31) -> uintptr_t {
+    const uintptr_t byHash = DV::ResolveAddress(aHash);
+    if (known231 && moduleBase) {
+      const uintptr_t byRva = moduleBase + aRva2_31;
+      
+      if (byHash && byHash != byRva) {
+        if (!collisions.empty()) collisions += ", ";
+        collisions += aName;
+      }
+      return byRva;
+    }
+    if (!byHash) {
+      if (!missing.empty()) missing += ", ";
+      missing += aName;
+    }
+    return byHash;
+  };
+  m_audioSysSlot = reinterpret_cast<void**>(resolve(kHashAudioSystem, "AudioSystem", kRvaAudioSystem));
+  m_table = reinterpret_cast<void*>(resolve(kHashTable, "Table", kRvaTable));
+  m_count = reinterpret_cast<uint16_t*>(resolve(kHashCount, "Count", kRvaCount));
+  m_names = reinterpret_cast<uint64_t*>(resolve(kHashNames, "Names", kRvaNames));
+  m_formats = reinterpret_cast<RowFormat*>(resolve(kHashFormats, "Formats", kRvaFormats));
+  m_pcm = reinterpret_cast<uint8_t**>(resolve(kHashPcm, "Pcm", kRvaPcm));
+  m_frames = reinterpret_cast<uint32_t*>(resolve(kHashFrames, "Frames", kRvaFrames));
+  m_slotRow = reinterpret_cast<uint16_t*>(resolve(kHashSlotRow, "SlotRow", kRvaSlotRow));
+  m_slotPlayingId = reinterpret_cast<uint32_t*>(resolve(kHashSlotPlayingId, "SlotPlayingId", kRvaSlotPlayingId));
+  m_slotPos = reinterpret_cast<uint32_t*>(resolve(kHashSlotPos, "SlotPos", kRvaSlotPos));
+  m_slotCount = reinterpret_cast<uint16_t*>(resolve(kHashSlotCount, "SlotCount", kRvaSlotCount));
+  m_tableInit = reinterpret_cast<TableInitFn>(resolve(kHashTableInit, "TableInit", kRvaTableInit));
+  m_setCallbacks = reinterpret_cast<SetCallbacksFn>(resolve(kHashSetCallbacks, "SetCallbacks", kRvaSetCallbacks));
+  m_register = reinterpret_cast<RegisterFn>(resolve(kHashRegister, "Register", kRvaRegister));
+  m_loadBankMemoryCopy = reinterpret_cast<LoadBankMemoryCopyFn>(resolve(kHashLoadBankMemoryCopy, "LoadBankMemoryCopy", kRvaLoadBankMemoryCopy));
+  m_executeThunk = reinterpret_cast<void*>(resolve(kHashExecuteThunk, "ExecuteThunk", kRvaExecuteThunk));
+  m_formatThunk = reinterpret_cast<void*>(resolve(kHashFormatThunk, "FormatThunk", kRvaFormatThunk));
+  m_audioInit = reinterpret_cast<void*>(resolve(kHashAudioInit, "AudioInit", kRvaAudioInit));
+  if (!missing.empty()) {
+    m_status = "address hashes unresolved for this game build: " + missing;
     return false;
   }
-  m_base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-  if (!m_base) {
-    m_status = "game module unresolved";
-    return false;
+  if (!collisions.empty()) {
+    plugin->Warn("address hash collides with another symbol (using the known 2.31 RVA): " + collisions);
   }
-  m_audioSysSlot = reinterpret_cast<void**>(m_base + kRvaAudioSystem);
-  m_table = reinterpret_cast<void*>(m_base + kRvaTable);
-  m_count = reinterpret_cast<uint16_t*>(m_base + kRvaCount);
-  m_names = reinterpret_cast<uint64_t*>(m_base + kRvaNames);
-  m_formats = reinterpret_cast<RowFormat*>(m_base + kRvaFormats);
-  m_pcm = reinterpret_cast<uint8_t**>(m_base + kRvaPcm);
-  m_frames = reinterpret_cast<uint32_t*>(m_base + kRvaFrames);
-  m_slotRow = reinterpret_cast<uint16_t*>(m_base + kRvaSlotRow);
-  m_slotPlayingId = reinterpret_cast<uint32_t*>(m_base + kRvaSlotPlayingId);
-  m_slotPos = reinterpret_cast<uint32_t*>(m_base + kRvaSlotPos);
-  m_slotCount = reinterpret_cast<uint16_t*>(m_base + kRvaSlotCount);
-  m_tableInit = reinterpret_cast<TableInitFn>(m_base + kRvaTableInit);
-  m_setCallbacks = reinterpret_cast<SetCallbacksFn>(m_base + kRvaSetCallbacks);
-  m_register = reinterpret_cast<RegisterFn>(m_base + kRvaRegister);
-  m_loadBankMemoryCopy = reinterpret_cast<LoadBankMemoryCopyFn>(m_base + kRvaLoadBankMemoryCopy);
-  m_executeThunk = reinterpret_cast<void*>(m_base + kRvaExecuteThunk);
-  m_formatThunk = reinterpret_cast<void*>(m_base + kRvaFormatThunk);
+
+  char version[32];
+  std::snprintf(version, sizeof(version), "%u.%u.%u", static_cast<unsigned>(sdk->runtime->major),
+                static_cast<unsigned>(sdk->runtime->minor), static_cast<unsigned>(sdk->runtime->patch));
+  if (!known231) {
+    plugin->Warn(std::string("game version ") + version +
+                 " is untested with AudioXL: addresses resolved by hash, struct layouts assumed as on 2.31");
+  }
 
   wchar_t exe[MAX_PATH];
   if (GetModuleFileNameW(nullptr, exe, MAX_PATH) > 0) {
@@ -173,7 +219,8 @@ bool SoundRegistry::Init() {
   }
   m_specs.assign(kMaxRows, SoundSpec{});
   m_ready = true;
-  m_status = "ready (2.31 addresses)";
+  m_status = std::string("ready (game ") + version +
+             (known231 ? ", known RVAs + hash cross-check)" : ", hash-resolved, untested)");
   return true;
 }
 

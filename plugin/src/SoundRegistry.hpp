@@ -85,6 +85,7 @@ class SoundRegistry {
   void OnAudioInitDone();
 
   const std::string& GameRoot() const { return m_gameRoot; }
+  void* AudioInitTarget() const { return m_audioInit; }   
   void Note(const std::string& aLine);
 
  private:
@@ -127,7 +128,6 @@ class SoundRegistry {
   bool m_enabled = false;
   bool m_manifestsLoaded = false;
   std::string m_status;
-  uintptr_t m_base = 0;
   void** m_audioSysSlot = nullptr;   
   void* m_table = nullptr;           
   uint16_t* m_count = nullptr;       
@@ -145,6 +145,7 @@ class SoundRegistry {
   LoadBankMemoryCopyFn m_loadBankMemoryCopy = nullptr;
   void* m_executeThunk = nullptr;
   void* m_formatThunk = nullptr;
+  void* m_audioInit = nullptr;
   std::string m_gameRoot;
 
   std::vector<std::shared_ptr<SoundData>> m_buffers;

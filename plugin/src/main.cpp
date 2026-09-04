@@ -12,8 +12,6 @@ namespace AudioXLNS {
 
 namespace {
 
-constexpr uintptr_t kRvaAudioInit = 0xA2E9FC;
-
 using AudioInitFn = uint8_t(__fastcall*)(void* aSelf, wchar_t* aArg, void* aArg2);
 AudioInitFn s_original = nullptr;
 void* s_hookTarget = nullptr;
@@ -29,8 +27,7 @@ void AttachHook() {
   if (!SoundRegistry::Get()->Available()) {
     return;   
   }
-  const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-  s_hookTarget = reinterpret_cast<void*>(base + kRvaAudioInit);
+  s_hookTarget = SoundRegistry::Get()->AudioInitTarget();
   const bool ok = plugin->Sdk()->hooking->Attach(plugin->Handle(), s_hookTarget,
                                                  reinterpret_cast<void*>(&OnAudioInit),
                                                  reinterpret_cast<void**>(&s_original));
