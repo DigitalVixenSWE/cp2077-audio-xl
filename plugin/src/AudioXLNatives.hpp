@@ -5,6 +5,7 @@
 #include <RedLib.hpp>
 
 #include "AudioFeed.hpp"
+#include "Emitters.hpp"
 #include "Manifest.hpp"
 #include "SoundRegistry.hpp"
 
@@ -71,14 +72,7 @@ class AudioXLNative : public Red::IScriptable {
     return row != 0xFFFF && AudioFeed::Get()->IsPlaying(row);
   }
 
-  static uint32_t WwiseId(Red::CName aName) {
-    uint32_t h = 0x811C9DC5u;
-    for (const char* p = aName.ToString(); p && *p; ++p) {
-      const char c = (*p >= 'A' && *p <= 'Z') ? static_cast<char>(*p + 32) : *p;
-      h = (h * 0x01000193u) ^ static_cast<uint8_t>(c);
-    }
-    return h;
-  }
+  static uint32_t WwiseId(Red::CName aName) { return WwiseHash(aName.ToString()); }
 
   static int32_t LoadBank(const Red::CString& aPath) {
     return SoundRegistry::Get()->LoadBank(aPath.c_str(), "script");
@@ -97,6 +91,29 @@ class AudioXLNative : public Red::IScriptable {
   static bool Has(Red::CName aName) { return SoundRegistry::Get()->Has(aName.ToString()); }
 
   static int32_t Count() { return SoundRegistry::Get()->Count(); }
+
+  static bool CreateEmitter(Red::CName aName, float aX, float aY, float aZ) {
+    return Emitters::Get()->Create(aName.ToString(), aX, aY, aZ);
+  }
+  static bool MoveEmitter(Red::CName aName, float aX, float aY, float aZ) {
+    return Emitters::Get()->Move(aName.ToString(), aX, aY, aZ);
+  }
+  
+  static bool SetEmitterReverb(Red::CName aName, Red::CName aBus, float aLevel) {
+    return Emitters::Get()->SetReverb(aName.ToString(), aBus.ToString(), aLevel);
+  }
+  static bool PlayOn(Red::CName aEmitter, Red::CName aSound) {
+    return Emitters::Get()->Play(aEmitter.ToString(), aSound.ToString());
+  }
+  
+  static bool StopOn(Red::CName aEmitter, Red::CName aSound, float aFadeOut) {
+    const std::string row = aSound.IsNone() ? std::string() : std::string(aSound.ToString());
+    return Emitters::Get()->Stop(aEmitter.ToString(), row, aFadeOut);
+  }
+  static bool DestroyEmitter(Red::CName aName) { return Emitters::Get()->Destroy(aName.ToString()); }
+  static int32_t DestroyAllEmitters() { return Emitters::Get()->DestroyAll(); }
+  static bool HasEmitter(Red::CName aName) { return Emitters::Get()->Has(aName.ToString()); }
+  static int32_t EmitterCount() { return Emitters::Get()->Count(); }
 
   static Red::DynArray<Red::CString> Report() {
     Red::DynArray<Red::CString> out;
@@ -132,6 +149,15 @@ RTTI_DEFINE_CLASS(AudioXLNS::AudioXLNative, "AudioXLNative", {
   RTTI_METHOD(Has);
   RTTI_METHOD(Count);
   RTTI_METHOD(Report);
+  RTTI_METHOD(CreateEmitter);
+  RTTI_METHOD(MoveEmitter);
+  RTTI_METHOD(SetEmitterReverb);
+  RTTI_METHOD(PlayOn);
+  RTTI_METHOD(StopOn);
+  RTTI_METHOD(DestroyEmitter);
+  RTTI_METHOD(DestroyAllEmitters);
+  RTTI_METHOD(HasEmitter);
+  RTTI_METHOD(EmitterCount);
 });
 
 #endif  

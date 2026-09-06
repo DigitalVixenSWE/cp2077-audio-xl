@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(AudioXL
-        VERSION 0.1.4
+        VERSION 0.2.0
         DESCRIPTION "AudioXL native half: registers mods WAVs in the engine's custom-sound registry without REDmod"
         LANGUAGES CXX)
 
@@ -81,7 +81,6 @@ target_compile_definitions(AudioXL PRIVATE
         WIN32_LEAN_AND_MEAN
         NOMINMAX
         _CRT_SECURE_NO_WARNINGS)
-
 
 set_target_properties(AudioXL PROPERTIES
         PREFIX ""

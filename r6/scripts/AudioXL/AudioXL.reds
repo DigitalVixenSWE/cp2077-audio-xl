@@ -65,6 +65,16 @@ public native class AudioXLNative extends IScriptable {
   public static native func Has(name: CName) -> Bool      
   public static native func Count() -> Int32
   public static native func Report() -> array<String>     
+  
+  public static native func CreateEmitter(name: CName, x: Float, y: Float, z: Float) -> Bool
+  public static native func MoveEmitter(name: CName, x: Float, y: Float, z: Float) -> Bool
+  public static native func SetEmitterReverb(name: CName, bus: CName, level: Float) -> Bool   
+  public static native func PlayOn(emitter: CName, sound: CName) -> Bool
+  public static native func StopOn(emitter: CName, sound: CName, fadeOut: Float) -> Bool      
+  public static native func DestroyEmitter(name: CName) -> Bool
+  public static native func DestroyAllEmitters() -> Int32
+  public static native func HasEmitter(name: CName) -> Bool
+  public static native func EmitterCount() -> Int32
 }
 
 public abstract class AudioXLPatcher {
@@ -191,6 +201,30 @@ public abstract class AudioXLAPI {
     return ok;
   }
 
+  public static func CreateEmitter(name: CName, pos: Vector4) -> Bool {
+    return AudioXLNative.CreateEmitter(name, pos.X, pos.Y, pos.Z);
+  }
+  public static func MoveEmitter(name: CName, pos: Vector4) -> Bool {
+    return AudioXLNative.MoveEmitter(name, pos.X, pos.Y, pos.Z);
+  }
+  
+  public static func SetEmitterReverb(name: CName, bus: CName, level: Float) -> Bool {
+    return AudioXLNative.SetEmitterReverb(name, bus, level);
+  }
+  public static func PlayOn(emitter: CName, sound: CName) -> Bool {
+    return AudioXLNative.PlayOn(emitter, sound);
+  }
+  
+  public static func StopOn(emitter: CName, opt sound: CName, opt fadeOut: Float) -> Bool {
+    return AudioXLNative.StopOn(emitter, sound, fadeOut);
+  }
+  public static func DestroyEmitter(name: CName) -> Bool {
+    return AudioXLNative.DestroyEmitter(name);
+  }
+  public static func HasEmitter(name: CName) -> Bool {
+    return AudioXLNative.HasEmitter(name);
+  }
+
   public static func RegisterPatcher(patcher: ref<AudioXLPatcher>) -> Void {
     let sys = AudioXLSystem.Get();
     if !IsDefined(sys) {
@@ -265,6 +299,8 @@ public class AudioXLSystem extends ScriptableService {
     this.Note("listening on Resource/Load for audioCookedMetadataResource + soundbanks.json");
     
     cb.RegisterCallback(n"Session/Ready", this, n"OnSessionReadyBanks");
+    
+    cb.RegisterCallback(n"Session/BeforeEnd", this, n"OnSessionEndEmitters");
     this.Note(s"native: \(AudioXLNative.Status())");
     
     this.AddEvent(n"axl_voice_2d", AudioXLNative.WwiseId(n"axl_voice_2d"));
@@ -417,6 +453,13 @@ public class AudioXLSystem extends ScriptableService {
     let n: Int32 = AudioXLNative.RetryBanks();
     if n > 0 {
       this.Note(s"banks: \(n) loaded at session start");
+    }
+  }
+
+  private cb func OnSessionEndEmitters(event: ref<GameSessionEvent>) -> Void {
+    let n: Int32 = AudioXLNative.DestroyAllEmitters();
+    if n > 0 {
+      this.Note(s"emitters: \(n) destroyed at session end");
     }
   }
 
@@ -670,7 +713,7 @@ public class AudioXLStatusCmd extends RedConsoleCmd {
     let out: String = sys.Report();
     let lines: array<String> = AudioXLNative.Report();
     let i: Int32 = 0;
-    out += s"native: \(AudioXLNative.Status()), \(AudioXLNative.Count()) rows
+    out += s"native: \(AudioXLNative.Status()), \(AudioXLNative.Count()) rows, \(AudioXLNative.EmitterCount()) emitters
 ";
     while i < ArraySize(lines) {
       out += lines[i] + "

@@ -14,13 +14,15 @@ Full documentation, manifest reference and the REDmod conversion recipe: the Nex
 
 ## Building the plugin
 
-Visual Studio 2022 and CMake. RED4ext.SDK and RedLib are expected as sibling checkouts, see `plugin/CMakeLists.txt`.
+Visual Studio 2022 and CMake.
 
 ```
 cd plugin
 cmake -S . -B build -A x64
 cmake --build build --config Release --parallel
 ```
+
+RED4ext.SDK and RedLib are fetched at configure time, pinned to the commits this was built against. A local checkout wins over the fetch if there is one: pass `-DRED4EXT_SDK_DIR=<path>` / `-DREDLIB_DIR=<path>`, or put them in `plugin/deps/` or beside the `plugin` folder.
 
 The DLL goes to `red4ext/plugins/AudioXL/AudioXL.dll`. Engine addresses are resolved at load through RED4ext from the game's own `cyberpunk2077_addresses.json` (hash list), so they follow game patches; struct layouts were reverse-engineered on 2.31, and an untested build runs with a warning in the log. A build missing any symbol disables the plugin and names the symbol in its status.
 

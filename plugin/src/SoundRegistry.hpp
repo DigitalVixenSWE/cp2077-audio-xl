@@ -29,8 +29,19 @@ struct SoundSpec {
   float maxDuration = 0.0f;    
   std::map<std::string, std::string> subtitles;   
   std::string speaker;         
+  std::string reverb;          
+  float reverbLevel = 1.0f;    
   bool valid = false;          
 };
+
+inline uint32_t WwiseHash(const std::string& aName) {
+  uint32_t h = 0x811C9DC5u;
+  for (unsigned char c : aName) {
+    const unsigned char l = (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + 32) : c;
+    h = (h * 0x01000193u) ^ l;
+  }
+  return h;
+}
 
 struct RowFormat {
   uint32_t sampleRate;

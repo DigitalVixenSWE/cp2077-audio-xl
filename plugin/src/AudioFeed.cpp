@@ -51,7 +51,7 @@ AudioFeed* AudioFeed::Get() {
   return &instance;
 }
 
-AudioFeed::AudioFeed() : m_voices(kMaxVoices), m_rows(kMaxRows), m_unbound(32) {}
+AudioFeed::AudioFeed() : m_voices(kMaxVoices), m_rows(kMaxRows), m_unbound(32), m_binds(kMaxBinds) {}
 
 bool AudioFeed::StillWaiting(uint32_t aPlayingId) {
   Unbound* free = nullptr;
@@ -79,7 +79,7 @@ AudioFeed::Voice* AudioFeed::Find(uint32_t aPlayingId) {
   return nullptr;
 }
 
-AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow) {
+AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow, bool aBound) {
   Voice* slot = nullptr;
   for (auto& v : m_voices) {
     if (!v.active) {
@@ -91,7 +91,8 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow) {
     
     auto* reg = SoundRegistry::Get();
     for (auto& v : m_voices) {
-      if (reg->SlotForPlayingId(v.playingId) == 0xFFFF) {
+      const bool tracked = v.bound ? IsBound(v.playingId) : reg->SlotForPlayingId(v.playingId) != 0xFFFF;
+      if (!tracked) {
         Retire(v);
         slot = &v;
         break;
@@ -125,6 +126,10 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow) {
   }
   slot->pos = slot->startFrame;
   slot->stopGen = m_rows[aRow].stopGen.load(std::memory_order_relaxed);
+  slot->bound = aBound;
+  if (aBound) {
+    if (BoundVoice* b = BindFor(aPlayingId)) slot->bindStopGen = b->stopGen.load(std::memory_order_relaxed);
+  }
   m_rows[aRow].live.fetch_add(1, std::memory_order_relaxed);
   return slot;
 }
@@ -136,8 +141,64 @@ void AudioFeed::Retire(Voice& aVoice) {
     while (cur > 0 && !live.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {
     }
   }
+  if (aVoice.active && aVoice.bound) Unbind(aVoice.playingId);
   aVoice.active = false;
   aVoice.playingId = 0;
+}
+
+AudioFeed::BoundVoice* AudioFeed::BindFor(uint32_t aPlayingId) {
+  if (aPlayingId == 0) return nullptr;
+  for (auto& b : m_binds) {
+    if (b.playingId.load(std::memory_order_acquire) == aPlayingId) return &b;
+  }
+  return nullptr;
+}
+
+bool AudioFeed::Bind(uint32_t aPlayingId, uint16_t aRow) {
+  if (aPlayingId == 0 || aRow >= kMaxRows) return false;
+  for (auto& b : m_binds) {
+    uint32_t expected = 0;
+    
+    if (b.playingId.load(std::memory_order_relaxed) != 0) continue;
+    b.row.store(aRow, std::memory_order_relaxed);
+    b.stopFade.store(0.0f, std::memory_order_relaxed);
+    if (b.playingId.compare_exchange_strong(expected, aPlayingId, std::memory_order_release)) return true;
+  }
+  return false;
+}
+
+void AudioFeed::Unbind(uint32_t aPlayingId) {
+  if (BoundVoice* b = BindFor(aPlayingId)) {
+    b->row.store(0xFFFF, std::memory_order_relaxed);
+    b->playingId.store(0, std::memory_order_release);
+  }
+}
+
+uint16_t AudioFeed::BoundRow(uint32_t aPlayingId) const {
+  if (aPlayingId == 0) return 0xFFFF;
+  for (const auto& b : m_binds) {
+    if (b.playingId.load(std::memory_order_acquire) == aPlayingId) return b.row.load(std::memory_order_relaxed);
+  }
+  return 0xFFFF;
+}
+
+void AudioFeed::StopVoice(uint32_t aPlayingId, float aFadeOut) {
+  if (BoundVoice* b = BindFor(aPlayingId)) {
+    b->stopFade.store(aFadeOut, std::memory_order_relaxed);
+    b->stopGen.fetch_add(1, std::memory_order_release);
+  }
+}
+
+void AudioFeed::Sweep() {
+  const uint32_t now = m_sweep.load(std::memory_order_acquire);
+  if (now == m_sweepSeen) return;
+  m_sweepSeen = now;
+  for (auto& v : m_voices) {
+    if (v.active && v.bound && !IsBound(v.playingId)) {
+      v.bound = false;   
+      Retire(v);
+    }
+  }
 }
 
 void AudioFeed::Render(Voice& v, void* aBuffer) {
@@ -175,6 +236,16 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
     v.stopping = true;
     v.stopFadeFrames = std::max(0.0, static_cast<double>(ctl.stopFade.load(std::memory_order_relaxed)) * rateHz);
     v.stopAtRendered = v.rendered;
+  }
+  if (!v.stopping && v.bound) {
+    
+    if (const BoundVoice* b = BindFor(v.playingId)) {
+      if (b->stopGen.load(std::memory_order_acquire) != v.bindStopGen) {
+        v.stopping = true;
+        v.stopFadeFrames = std::max(0.0, static_cast<double>(b->stopFade.load(std::memory_order_relaxed)) * rateHz);
+        v.stopAtRendered = v.rendered;
+      }
+    }
   }
 
   const float rowGain = ctl.gain.load(std::memory_order_relaxed);
@@ -239,7 +310,7 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
     buf->eState = kDataReady;
   }
   
-  const uint16_t slot = reg->SlotForPlayingId(v.playingId);
+  const uint16_t slot = v.bound ? 0xFFFF : reg->SlotForPlayingId(v.playingId);
   if (slot != 0xFFFF) {
     if (uint32_t* p = reg->PositionForSlot(slot)) *p = static_cast<uint32_t>(v.pos);
   }
@@ -248,11 +319,16 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
 void __fastcall AudioFeed::Execute(uint32_t aPlayingId, void* aBuffer) {
   auto* self = Get();
   auto* buf = static_cast<AkBuffer*>(aBuffer);
+  self->Sweep();
   Voice* v = self->Find(aPlayingId);
   if (!v) {
     auto* reg = SoundRegistry::Get();
-    const uint16_t slot = reg->SlotForPlayingId(aPlayingId);
-    const uint16_t row = slot == 0xFFFF ? 0xFFFF : reg->RowForSlot(slot);
+    uint16_t row = self->BoundRow(aPlayingId);
+    const bool bound = row != 0xFFFF;
+    if (!bound) {
+      const uint16_t slot = reg->SlotForPlayingId(aPlayingId);
+      row = slot == 0xFFFF ? 0xFFFF : reg->RowForSlot(slot);
+    }
     if (row == 0xFFFF || row >= kMaxRows) {
       if (self->StillWaiting(aPlayingId)) {
         buf->uValidFrames = 0;
@@ -269,16 +345,19 @@ void __fastcall AudioFeed::Execute(uint32_t aPlayingId, void* aBuffer) {
         u.tries = 0;
       }
     }
-    v = self->Start(aPlayingId, row);
+    v = self->Start(aPlayingId, row, bound);
   }
   self->Render(*v, aBuffer);
 }
 
 void __fastcall AudioFeed::Format(uint32_t aPlayingId, void* aFormat) {
   auto* reg = SoundRegistry::Get();
-  const uint16_t slot = reg->SlotForPlayingId(aPlayingId);
-  if (slot == 0xFFFF) return;
-  const uint16_t row = reg->RowForSlot(slot);
+  uint16_t row = Get()->BoundRow(aPlayingId);
+  if (row == 0xFFFF) {
+    const uint16_t slot = reg->SlotForPlayingId(aPlayingId);
+    if (slot == 0xFFFF) return;
+    row = reg->RowForSlot(slot);
+  }
   if (row == 0xFFFF) return;
   if (const RowFormat* fmt = reg->FormatForRow(row)) {
     std::memcpy(aFormat, fmt, sizeof(RowFormat));

@@ -20,8 +20,9 @@ Nothing to configure. Install it, then install mods built on it. AudioXL coexist
 [*][url=https://www.nexusmods.com/cyberpunk2077/mods/7780]Codeware[/url][/*]
 [*]Game version 2.31.[/*]
 [/list]
-Optional: 
-[url=https://www.nexusmods.com/cyberpunk2077/mods/30726]Redscript Configuration Framework[/url] - shows this page in-game.[url=https://www.nexusmods.com/cyberpunk2077/mods/31920]RedLogger[/url] - for logging.
+Optional:
+[url=https://www.nexusmods.com/cyberpunk2077/mods/30726]Redscript Configuration Framework[/url] - shows this page in-game.
+[url=https://www.nexusmods.com/cyberpunk2077/mods/31920]RedLogger[/url] - for logging.
 
 [b]Install[/b]
 Drop the archive into your mod manager, or extract it into the game folder so that you end up with:
@@ -80,7 +81,8 @@ fadeIn    seconds                    fadeOut   seconds, applied by AudioXLAPI.St
 start     seconds into the file      end       seconds, 0 = to the end
 stream    true = map the file, read it only when it plays
 maxDuration  seconds; the sound ends itself after this even when looping (fades with fadeOut)
-subtitle  text, or { "en-us": "...", "de-de": "..." }     speaker   name shown with the subtitle[/code]
+subtitle  text, or { "en-us": "...", "de-de": "..." }     speaker   name shown with the subtitle
+reverb    a revb_* aux bus, used when the row plays on an AudioXL emitter    reverbLevel  0..1 (default 1.0)[/code]
 [/quote]
 
 [b]Routing types[/b] decide which mixer and which volume slider a sound follows:
@@ -93,7 +95,7 @@ axl_radio_2d          vehicle radio                        (Vehicle Radio slider
 axl_sfx_2d, axl_master_2d
 mod_skip              mute the named vanilla event[/code]
 [/quote]
-The [b]mod_sfx_*[/b] types are the game's own; the [b]axl_*[/b] types come with AudioXL.
+The [b]mod_sfx_*[/b] types are the game's own; the [b]axl_*[/b] types come with AudioXL. Every positioned type follows the game's own reverb zones when posted on an entity: nothing to set up.
 
 [b]Live control[/b], for sounds you registered:
 [quote][code]AudioXLAPI.Stop(n"mymod_pad", 3.0);      // fade out over 3 s; vanilla Stop does nothing for these
@@ -101,6 +103,46 @@ AudioXLAPI.SetGain(n"mymod_pad", 0.5);   // while it plays
 AudioXLAPI.IsPlaying(n"mymod_pad");[/code]
 [/quote]
 A looping sound plays until Stop is called, until its entity despawns, or until its [b]maxDuration[/b] runs out.
+
+[b]Emitters[/b]
+A sound at a place of your own. Nothing in the world needs to exist there: you give AudioXL a position, it gives the sound a Wwise object, and the sound stays put while you walk around it.
+[quote][code]// a spawned prop with no entity worth posting on: a compressor in a garage your mod placed
+AudioXLAPI.CreateEmitter(n"mymod_garage_compressor", garagePos);        // Vector4, game coordinates
+AudioXLAPI.PlayOn(n"mymod_garage_compressor", n"mymod_compressor_loop");
+...
+AudioXLAPI.StopOn(n"mymod_garage_compressor", n"mymod_compressor_loop", 2.0);   // fade 2 s; sound n"None" = everything on it
+AudioXLAPI.DestroyEmitter(n"mymod_garage_compressor");[/code]
+[/quote]
+The rows you play on it should be a positioned type (mod_sfx_occlusion and friends); a 2D row on an emitter sits on the listener, as 2D does everywhere. Emitters are torn down at session end, so create them on Session/Ready. Creating a name that already exists moves it, and MoveEmitter moves it while it plays.
+
+[b]Emitters with reverb[/b]
+The game reverberates every sound by the zone its emitter stands in. So the emitter can carry a reverb of its own (if played through AudioXLAPI instead of regular game Play): any of the game's reverb buses, at a level you choose.
+[quote][code]AudioXLAPI.CreateEmitter(n"mymod_garage_compressor", garagePos);
+AudioXLAPI.SetEmitterReverb(n"mymod_garage_compressor", n"revb_interior_warehouse__large", 0.8);   // bus, 0..1
+AudioXLAPI.PlayOn(n"mymod_garage_compressor", n"mymod_compressor_loop");
+AudioXLAPI.PlayOn(n"mymod_garage_compressor", n"mymod_door_slam");            // same place, same reverb
+AudioXLAPI.SetEmitterReverb(n"mymod_garage_compressor", n"None", 0.0);       // dry again[/code]
+[/quote]
+Or put the reverb on the row instead, and it rides along whenever that row plays on an emitter that has no reverb of its own:
+[quote][code]{ "name": "mymod_door_slam", "type": "mod_sfx_occlusion", "file": "slam.wav",
+  "reverb": "revb_interior_metro_station_large_loud__large", "reverbLevel": 1.0 }[/code]
+[/quote]
+Rows played through the vanilla Play ignore the row's reverb.
+
+[b]Which route[/b]
+[list]
+[*][b]On an entity[/b], with the vanilla Play and an occlusion type: the sound sits in whatever reverb zone the entity stands in and walls occlude it. The game decides how wet. Best for an NPC, vehicle or a device already in the world.[/*]
+[*][b]On an AudioXL emitter[/b]: your position, your reverb, your level. No occlusion and no zone reverb.[/*]
+[/list]
+
+The reverb buses are the game's own and always loaded. Each of these comes as [b]__small[/b], [b]__medium[/b] and [b]__large[/b]:
+[quote][code]revb_interior_room_small    revb_interior_room_medium    revb_interior_room_large    revb_interior_default
+revb_interior_default_small revb_interior_elevator_small revb_interior_factory_medium revb_interior_factory_large
+revb_interior_megabuilding_corridor_large   revb_interior_metro_station_large_loud
+revb_indoor_bright          revb_exterior_default        revb_exterior_default_bl    revb_exterior_default_2[/code]
+[/quote]
+Plus [b]revb_exterior_slight_echo_small/medium/large[/b], [b]revb_interior_boomy_small/medium/large[/b] and the car interiors [b]revb_indoor_car_common/sport/suv/truck/nomad/luxury_sedan/hipercar[/b]. Underwater is the vanilla game parameter, no AudioXL needed:
+[code]GameInstance.GetAudioSystem(gi).GlobalParameter(n"g_underwater_depth", depth);[/code]
 
 [b]Voice lines with subtitles[/b]
 [quote][code]{ "name": "mymod_greeting", "type": "axl_voice_2d", "speaker": "V",
@@ -133,6 +175,8 @@ The list pairs put a footwear record on a material; a footwear record is inert u
 [code]AudioXLPatcher[/code]
 Edit typed fields in Apply, register it. Phantom Liberty keeps its records in a second metadata resource, so those edits go in ApplyEP1 instead; it is skipped when EP1 is not installed. A generator is included for the common case: point it at a modified metadata export and it writes the patcher for you.
 
+[b]Reverb records[/b] are ordinary metadata too. The 22 [b]audioDynamicReverbSettings[/b] (revb_interior_warehouse, revb_interior_room_small, ...) and the 45 acoustic zones ([b]audioAcousticZoneMetadata[/b], amb_tag_int_*) sit in the same cooked metadata: a patcher retunes a vanilla reverb (bus names, maxDistance, crossovers), a contribution adds new ones. Leave the zone's [b]parameters[/b] array alone from script.
+
 
 [color=#e06666][size=6][b]- Converting a REDmod sound mod -[/b][/size][/color]
 
@@ -160,7 +204,8 @@ Migrating Audioware mods should be fairly easy:
 [list]
 [*]The YAML manifest becomes a sounds.json. [b]sfx[/b] entries are rows with a gain; [b]volume[/b] becomes [b]gain[/b], [b]loop[/b] stays [b]loop[/b], fade tweens become [b]fadeIn[/b] / [b]fadeOut[/b]. mp3, ogg and flac files stay as they are.[/*]
 [*][b]voices[/b] with fem / male takes become one row with a gendered [b]file[/b] and a [b]subtitle[/b]; the mute placeholder files go away. Play them with AudioXLAPI.PlayLine.[/*]
-[*]Spatial emitters need no registration. Post the sound on the entity with the vanilla AudioSystem.Play(name, entityID, emitterName) and give the row an occlusion type; the vehicle or NPC is already a Wwise object, and the sound ends when it despawns.[/*]
+[*]Spatial emitters on an entity need no registration. Post the sound on the entity with the vanilla AudioSystem.Play(name, entityID, emitterName) and give the row an occlusion type; the vehicle or NPC is already a Wwise object, and the sound ends when it despawns. An emitter at a bare position, or with a reverb of its own, is AudioXLAPI.CreateEmitter + PlayOn.[/*]
+[*]reverb_mix and the presets: the game does zone reverb on its own for anything on an entity; a chosen reverb is SetEmitterReverb on an AudioXL emitter; underwater is the vanilla g_underwater_depth parameter.[/*]
 [*]Stop is AudioXLAPI.Stop(name, fadeOut); live volume is AudioXLAPI.SetGain.[/*]
 [*]Gate your calls on @if(ModuleExists("AudioXL")).[/*]
 [/list]
@@ -168,6 +213,7 @@ Migrating Audioware mods should be fairly easy:
 
 [color=#e06666][size=6][b]- Updates -[/b][/size][/color]
 
+[i][u]0.2.0[/u][/i] - AudioXL emitters: a sound at a position of your own with a reverb of your own.
 [i][u]0.1.4[/u][/i] - Repackage. The 0.1.2 and 0.1.3 accidentally got the wrong plugin, but no functional difference.
 [i][u]0.1.3[/u][/i] - Patchers reach Phantom Liberty records through ApplyEP1. Generator takes an EP1 pair and an exclude list. Fixed a startup crash: one engine address hash is shared by two different symbols, so it now prefers the known address on 2.31 and warns when the two disagree.
 [i][u]0.1.2[/u][/i] - Engine addresses resolved through the game's address hash list (RED4ext) instead of hardcoded 2.31 offsets.
@@ -181,6 +227,7 @@ Migrating Audioware mods should be fairly easy:
 [*]The radioport route is experimental: it follows its slider at the main menu but is currently silent in-game.[/*]
 [*]Rows are read once at audio init. Adding a manifest needs a restart; script registration works any time.[/*]
 [*]Some sounds will not play at main menu, specifically those going via sfx bus.[/*]
+[*]Sounds on an AudioXL emitter get no occlusion and no zone reverb; that is the trade for a reverb of your own. Use the vanilla Play on an entity when you want the game's acoustics.[/*]
 [/list]
 
 
