@@ -13,6 +13,8 @@
 #include "SafeReloc.hpp"
 #include "AudioXLPlugin.hpp"
 #include "Decode.hpp"
+#include "Duration.hpp"
+#include "Stream.hpp"
 #include "Manifest.hpp"
 
 namespace AudioXLNS {
@@ -131,6 +133,10 @@ class MappedData : public SoundData {
 
 }  
 
+std::shared_ptr<SoundData> MapFile(const std::string& aPath, bool aPrefault) {
+  return MappedData::Open(aPath, aPrefault);
+}
+
 SoundRegistry* SoundRegistry::Get() {
   static SoundRegistry instance;
   return &instance;
@@ -218,6 +224,8 @@ bool SoundRegistry::Init() {
     m_gameRoot = std::filesystem::path(exe).parent_path().parent_path().parent_path().string();
   }
   m_specs.assign(kMaxRows, SoundSpec{});
+  m_streams.assign(kMaxRows, nullptr);
+  m_streamFrames.assign(kMaxRows, 0);
   m_ready = true;
   m_status = std::string("ready (game ") + version +
              (known231 ? ", known RVAs + hash cross-check)" : ", hash-resolved, untested)");
@@ -300,7 +308,9 @@ float SoundRegistry::Duration(const std::string& aName) const {
   if (row == 0xFFFF) return 0.0f;
   const RowFormat* fmt = FormatForRow(row);
   if (!fmt || fmt->sampleRate == 0) return 0.0f;
-  float d = static_cast<float>(FramesForRow(row)) / static_cast<float>(fmt->sampleRate);
+  
+  const uint64_t streamed = StreamFramesForRow(row);
+  float d = static_cast<float>(streamed ? streamed : FramesForRow(row)) / static_cast<float>(fmt->sampleRate);
   if (const SoundSpec* spec = SpecForRow(row)) {
     if (spec->rate > 0.0f) d /= spec->rate;
     if (spec->end > 0.0f) d = std::min(d, spec->end - spec->start);
@@ -345,6 +355,14 @@ const SoundSpec* SoundRegistry::SpecForRow(uint16_t aRow) const {
 const RowFormat* SoundRegistry::FormatForRow(uint16_t aRow) const { return m_ready ? &m_formats[aRow] : nullptr; }
 const uint8_t* SoundRegistry::PcmForRow(uint16_t aRow) const { return m_ready ? m_pcm[aRow] : nullptr; }
 uint32_t SoundRegistry::FramesForRow(uint16_t aRow) const { return m_ready ? m_frames[aRow] : 0; }
+
+StreamRow* SoundRegistry::StreamForRow(uint16_t aRow) const {
+  return aRow < m_streams.size() ? m_streams[aRow] : nullptr;
+}
+
+uint64_t SoundRegistry::StreamFramesForRow(uint16_t aRow) const {
+  return aRow < m_streamFrames.size() ? m_streamFrames[aRow] : 0;
+}
 uint16_t SoundRegistry::RowForSlot(uint16_t aSlot) const { return m_ready ? m_slotRow[aSlot] : 0xFFFF; }
 uint32_t* SoundRegistry::PositionForSlot(uint16_t aSlot) const { return m_ready ? &m_slotPos[aSlot] : nullptr; }
 uint32_t SoundRegistry::PlayingIdForSlot(uint16_t aSlot) const { return m_ready ? m_slotPlayingId[aSlot] : 0; }
@@ -423,14 +441,85 @@ bool SoundRegistry::ValidateWav(const uint8_t* d, size_t n, std::string& aWhy) c
   return false;
 }
 
-std::shared_ptr<SoundData> SoundRegistry::Load(const SoundSpec& aSpec, std::string& aWhy) {
+namespace {
+
+std::vector<uint8_t> SilentWav(uint32_t aRate, uint32_t aChannels, uint32_t aFrames) {
+  const uint32_t bytes = aFrames * aChannels * 2;
+  std::vector<uint8_t> wav(44 + bytes, 0);
+  auto put32 = [&](size_t at, uint32_t v) { std::memcpy(wav.data() + at, &v, 4); };
+  auto put16 = [&](size_t at, uint16_t v) { std::memcpy(wav.data() + at, &v, 2); };
+  std::memcpy(wav.data(), "RIFF", 4);
+  put32(4, static_cast<uint32_t>(wav.size() - 8));
+  std::memcpy(wav.data() + 8, "WAVE", 4);
+  std::memcpy(wav.data() + 12, "fmt ", 4);
+  put32(16, 16);
+  put16(20, 1);
+  put16(22, static_cast<uint16_t>(aChannels));
+  put32(24, aRate);
+  put32(28, aRate * aChannels * 2);
+  put16(32, static_cast<uint16_t>(aChannels * 2));
+  put16(34, 16);
+  std::memcpy(wav.data() + 36, "data", 4);
+  put32(40, bytes);
+  return wav;
+}
+
+}  
+
+std::shared_ptr<SoundData> SoundRegistry::OpenStream(const std::string& aFull, const std::string& aExt,
+                                                     float aSeconds, std::string& aWhy,
+                                                     std::unique_ptr<StreamRow>* aOutStream) {
+  auto mapped = MapFile(aFull, false);
+  if (!mapped) {
+    aWhy = "cannot map " + aFull;
+    return nullptr;
+  }
+  StreamDecoder probe;
+  if (!probe.Open(aExt, mapped, aWhy)) return nullptr;
+  const uint32_t rate = probe.Rate();
+  const uint32_t channels = probe.Channels();
+  if (rate == 0 || channels == 0 || channels > 8) {
+    aWhy = "unusable format";
+    return nullptr;
+  }
+  const uint64_t frames = static_cast<uint64_t>(static_cast<double>(aSeconds) * rate);
+  if (frames == 0) {
+    aWhy = "zero length";
+    return nullptr;
+  }
+  *aOutStream = std::make_unique<StreamRow>(aFull, aExt, rate, channels, frames);
+  return std::make_shared<HeapData>(SilentWav(rate, channels, 96));
+}
+
+std::shared_ptr<SoundData> SoundRegistry::Load(const SoundSpec& aSpec, std::string& aWhy,
+                                              std::unique_ptr<StreamRow>* aOutStream) {
   const std::string full = ResolvePath(aSpec.path);
+  const std::string ext = Lower(std::filesystem::path(full).extension().string());
+  
+  const bool compressed = (ext == ".mp3" || ext == ".ogg" || ext == ".flac");
+  if (aOutStream && compressed) {
+    const float seconds = duration::AudioDuration(std::filesystem::path(full));
+    const bool wantsRandomAccess = aSpec.loop || aSpec.end > 0.0f || aSpec.rate != 1.0f;
+    const bool bigEnough = aSpec.stream || seconds >= kStreamSeconds;
+    if (bigEnough && seconds > 0.0f) {
+      if (wantsRandomAccess) {
+        AudioXLPlugin::Get()->Warn("Register '" + aSpec.name +
+                                   "': loop/region/rate need the whole sound in memory, so it is not streamed");
+      } else if (auto stub = OpenStream(full, ext, seconds, aWhy, aOutStream)) {
+        return stub;
+      } else {
+        
+        AudioXLPlugin::Get()->Warn("Register '" + aSpec.name + "': cannot stream (" + aWhy +
+                                   "); decoding it whole");
+        aWhy.clear();
+      }
+    }
+  }
   {
     std::lock_guard lock(m_mutex);
     auto it = m_byPath.find(full);
     if (it != m_byPath.end()) return it->second;
   }
-  const std::string ext = Lower(std::filesystem::path(full).extension().string());
   std::shared_ptr<SoundData> data;
   if (ext == ".wav") {
     data = MappedData::Open(full, !aSpec.stream);
@@ -438,7 +527,7 @@ std::shared_ptr<SoundData> SoundRegistry::Load(const SoundSpec& aSpec, std::stri
       aWhy = "cannot open " + full;
       return nullptr;
     }
-  } else if (ext == ".mp3" || ext == ".ogg" || ext == ".flac") {
+  } else if (compressed) {
     std::ifstream f(full, std::ios::binary | std::ios::ate);
     if (!f) {
       aWhy = "cannot open " + full;
@@ -577,13 +666,14 @@ bool SoundRegistry::Register(const SoundSpec& aSpec, const std::string& aSource)
     return Mute(aSpec.name, aSource);
   }
   std::string why;
-  auto data = Load(aSpec, why);
+  std::unique_ptr<StreamRow> stream;
+  auto data = Load(aSpec, why, &stream);
   if (!data) {
     plugin->Error("Register '" + aSpec.name + "' (" + aSource + "): " + why);
     Note("  FAILED " + aSpec.name + ": " + why);
     return false;
   }
-  return RegisterNow(aSpec, data, aSource);
+  return RegisterNow(aSpec, data, aSource, std::move(stream));
 }
 
 bool SoundRegistry::Mute(const std::string& aName, const std::string& aSource) {
@@ -618,7 +708,7 @@ bool SoundRegistry::Mute(const std::string& aName, const std::string& aSource) {
 }
 
 bool SoundRegistry::RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundData> aData,
-                                const std::string& aSource) {
+                                const std::string& aSource, std::unique_ptr<StreamRow> aStream) {
   auto* plugin = AudioXLPlugin::Get();
   std::string why;
   if (!ValidateWav(aData->Data(), aData->Size(), why)) {
@@ -633,7 +723,9 @@ bool SoundRegistry::RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundDat
                                             "custom_sound_test", "mod_skip",
                                             
                                             "axl_voice_2d", "axl_music_2d", "axl_sfx_2d", "axl_master_2d",
-                                            "axl_radio_2d", "axl_radioport_2d"};
+                                            "axl_radio_2d", "axl_radioport_2d",
+                                            
+                                            "axl_radio_3d", "axl_radio_veh3d"};
   bool known = false;
   for (const char* t : kKnownTypes) {
     if (aSpec.type == t) known = true;
@@ -661,7 +753,8 @@ bool SoundRegistry::RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundDat
   e.file = hash;
   e.type = Hash(aSpec.type);
   e.name = hash;
-  e.gain = aSpec.gain;
+  
+  e.gain = 1.0f;
   e.pitch = aSpec.pitch;
   e.distance = aSpec.distance;
   const uint16_t before = *m_count;
@@ -673,6 +766,13 @@ bool SoundRegistry::RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundDat
   }
   m_buffers.push_back(std::move(aData));
   if (before < m_specs.size()) {
+    
+    AudioFeed::Get()->SetGain(before, aSpec.gain);
+    if (aStream) {
+      m_streamFrames[before] = aStream->TotalFrames();
+      m_streams[before] = StreamPump::Get()->Add(std::move(aStream));
+      StreamPump::Get()->Start();
+    }
     m_specs[before] = aSpec;
     m_specs[before].valid = true;   
   }

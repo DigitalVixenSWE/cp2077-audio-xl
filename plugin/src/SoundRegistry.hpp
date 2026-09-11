@@ -12,6 +12,8 @@
 
 namespace AudioXLNS {
 
+class StreamRow;
+
 struct SoundSpec {
   std::string name;
   std::string type = "mod_sfx_2d";
@@ -26,6 +28,8 @@ struct SoundSpec {
   float end = 0.0f;            
   float rate = 1.0f;           
   bool stream = false;         
+  
+  bool resume = false;
   float maxDuration = 0.0f;    
   std::map<std::string, std::string> subtitles;   
   std::string speaker;         
@@ -56,12 +60,17 @@ class SoundData {
   virtual size_t Size() const = 0;
 };
 
+std::shared_ptr<SoundData> MapFile(const std::string& aPath, bool aPrefault);
+
 class SoundRegistry {
  public:
   static SoundRegistry* Get();
 
   bool Init();
+  
   bool Available() const { return m_ready; }
+  
+  bool Enabled() const { return m_ready && m_enabled; }
   const std::string& Status() const { return m_status; }
 
   bool EnsureEnabled();
@@ -80,6 +89,9 @@ class SoundRegistry {
 
   int32_t RetryBanks();
   std::vector<std::string> Report() const;
+
+  StreamRow* StreamForRow(uint16_t aRow) const;
+  uint64_t StreamFramesForRow(uint16_t aRow) const;
 
   const SoundSpec* SpecForRow(uint16_t aRow) const;
   const RowFormat* FormatForRow(uint16_t aRow) const;
@@ -123,8 +135,15 @@ class SoundRegistry {
     std::string bankPath;   
   };
 
-  bool RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundData> aData, const std::string& aSource);
-  std::shared_ptr<SoundData> Load(const SoundSpec& aSpec, std::string& aWhy);
+  bool RegisterNow(const SoundSpec& aSpec, std::shared_ptr<SoundData> aData, const std::string& aSource,
+                   std::unique_ptr<StreamRow> aStream = nullptr);
+  
+  std::shared_ptr<SoundData> Load(const SoundSpec& aSpec, std::string& aWhy,
+                                  std::unique_ptr<StreamRow>* aOutStream = nullptr);
+  std::shared_ptr<SoundData> OpenStream(const std::string& aFull, const std::string& aExt, float aSeconds,
+                                        std::string& aWhy, std::unique_ptr<StreamRow>* aOutStream);
+
+  static constexpr float kStreamSeconds = 45.0f;
   bool ValidateWav(const uint8_t* aBytes, size_t aSize, std::string& aWhy) const;
   std::string ResolvePath(const std::string& aPath) const;
   uint64_t Hash(const std::string& aName) const;
@@ -161,6 +180,8 @@ class SoundRegistry {
 
   std::vector<std::shared_ptr<SoundData>> m_buffers;
   std::map<std::string, std::shared_ptr<SoundData>> m_byPath;
+  std::vector<StreamRow*> m_streams;         
+  std::vector<uint64_t> m_streamFrames;      
   std::vector<SoundSpec> m_specs;            
   std::vector<Pending> m_queue;
   std::vector<Pending> m_bankRetry;

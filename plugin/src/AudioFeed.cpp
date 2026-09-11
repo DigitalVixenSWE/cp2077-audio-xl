@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "SoundRegistry.hpp"
+#include "Stream.hpp"
 
 namespace AudioXLNS {
 
@@ -104,9 +105,20 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow, bool aBou
     }
   }
   auto* reg = SoundRegistry::Get();
-  const uint32_t total = reg->FramesForRow(aRow);
+  
+  StreamRow* stream = reg->StreamForRow(aRow);
+  const uint32_t total = stream ? static_cast<uint32_t>(std::min<uint64_t>(stream->TotalFrames(), 0xFFFFFFFFull))
+                                : reg->FramesForRow(aRow);
   const RowFormat* fmt = reg->FormatForRow(aRow);
   const double rateHz = fmt ? static_cast<double>(fmt->sampleRate) : 48000.0;
+  
+  if (stream) {
+    for (auto& other : m_voices) {
+      if (&other != slot && other.active && other.stream == stream) {
+        other.evict = true;
+      }
+    }
+  }
   *slot = Voice{};
   slot->playingId = aPlayingId;
   slot->row = aRow;
@@ -124,7 +136,18 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow, bool aBou
       slot->endFrame = total;
     }
   }
+  
+  const uint64_t armed = m_rows[aRow].startFrame.exchange(kNoStart, std::memory_order_acq_rel);
+  if (armed != kNoStart) {
+    const uint32_t at = static_cast<uint32_t>(std::min<uint64_t>(armed, total));
+    if (at < slot->endFrame) slot->startFrame = at;
+  }
   slot->pos = slot->startFrame;
+  slot->stream = stream;
+  if (stream) {
+    
+    stream->RequestSeek(slot->startFrame);
+  }
   slot->stopGen = m_rows[aRow].stopGen.load(std::memory_order_relaxed);
   slot->bound = aBound;
   if (aBound) {
@@ -135,13 +158,31 @@ AudioFeed::Voice* AudioFeed::Start(uint32_t aPlayingId, uint16_t aRow, bool aBou
 }
 
 void AudioFeed::Retire(Voice& aVoice) {
+  
+  if (aVoice.stream) {
+    aVoice.stream->RequestIdle();
+    aVoice.stream = nullptr;
+  }
   if (aVoice.active && aVoice.row < kMaxRows) {
     auto& live = m_rows[aVoice.row].live;
     uint32_t cur = live.load(std::memory_order_relaxed);
     while (cur > 0 && !live.compare_exchange_weak(cur, cur - 1, std::memory_order_relaxed)) {
     }
   }
+  
+  if (aVoice.active && !aVoice.evict && aVoice.row < kMaxRows) {
+    if (const SoundSpec* spec = SoundRegistry::Get()->SpecForRow(aVoice.row)) {
+      if (spec->resume) {
+        m_rows[aVoice.row].startFrame.store(
+            aVoice.atEnd ? kNoStart : static_cast<uint64_t>(aVoice.pos), std::memory_order_release);
+      }
+    }
+  }
   if (aVoice.active && aVoice.bound) Unbind(aVoice.playingId);
+  
+  if (aVoice.active && aVoice.row < kMaxRows) {
+    m_rows[aVoice.row].posFrame.store(0, std::memory_order_relaxed);
+  }
   aVoice.active = false;
   aVoice.playingId = 0;
 }
@@ -212,6 +253,19 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
     Retire(v);
     return;
   }
+  
+  const uint16_t engineSlot = v.bound ? 0xFFFF : reg->SlotForPlayingId(v.playingId);
+  if (!v.bound) {
+    if (engineSlot != 0xFFFF) {
+      v.sawSlot = true;
+    } else if (v.sawSlot) {
+      buf->uValidFrames = 0;
+      buf->eState = kNoMoreData;
+      Retire(v);        
+      return;
+    }
+  }
+
   const uint32_t channels = fmt->channelConfig & 0xFF;
   const uint32_t bits = fmt->blockAndBits & 0x3F;
   const uint32_t bytesPerSample = bits / 8;
@@ -254,6 +308,79 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
   uint32_t produced = 0;
   bool ended = false;
 
+  if (v.stream) {
+    
+    if (v.evict) {
+      std::memset(out, 0, static_cast<size_t>(maxFrames) * frameBytes);
+      buf->uValidFrames = 0;
+      buf->eState = kNoMoreData;
+      v.stream = nullptr;
+      Retire(v);
+      return;
+    }
+    const uint64_t want = std::min<uint64_t>(maxFrames, v.endFrame > v.pos ? static_cast<uint64_t>(v.endFrame - v.pos) : 0);
+    const uint64_t got = want ? v.stream->Take(reinterpret_cast<int16_t*>(out), want) : 0;
+    produced = static_cast<uint32_t>(got);
+    v.pos += static_cast<double>(got);
+    v.rendered += got;
+
+    double env = rowGain;
+    if (v.stopping) {
+      const double since = static_cast<double>(v.rendered - v.stopAtRendered);
+      if (v.stopFadeFrames <= 0.0 || since >= v.stopFadeFrames) {
+        env = 0.0;
+        ended = true;
+      } else {
+        env *= 1.0 - since / v.stopFadeFrames;
+      }
+    }
+    if (v.fadeInFrames > 0.0 && static_cast<double>(v.rendered) < v.fadeInFrames) {
+      env *= static_cast<double>(v.rendered) / v.fadeInFrames;
+    }
+    if (env != 1.0 && produced > 0) {
+      auto* pcm16 = reinterpret_cast<int16_t*>(out);
+      const size_t samples = static_cast<size_t>(produced) * channels;
+      for (size_t i = 0; i < samples; ++i) {
+        pcm16[i] = static_cast<int16_t>(std::lround(pcm16[i] * env));
+      }
+    }
+    if (v.maxFrames > 0 && v.rendered >= v.maxFrames) ended = true;
+    if (static_cast<uint64_t>(v.pos) >= v.endFrame) {
+      ended = true;
+      v.atEnd = true;
+    }
+    
+    if (got == 0 && v.stream->Exhausted()) {
+      ended = true;
+      v.atEnd = true;
+    }
+    
+    v.dry = got == 0 ? v.dry + 1 : 0;
+    if (v.dry > 480) ended = true;
+
+    if (produced < maxFrames) {
+      std::memset(out + static_cast<size_t>(produced) * frameBytes, 0,
+                  static_cast<size_t>(maxFrames - produced) * frameBytes);
+    }
+    buf->uValidFrames = static_cast<uint16_t>(produced);
+    ctl.posFrame.store(static_cast<uint64_t>(v.pos), std::memory_order_relaxed);
+    
+    if (engineSlot != 0xFFFF) {
+      if (uint32_t* at = reg->PositionForSlot(engineSlot)) *at = static_cast<uint32_t>(v.pos);
+    }
+    if (ended) {
+      buf->eState = kNoMoreData;
+      v.stream->RequestIdle();
+      Retire(v);
+    } else if (produced == 0) {
+      
+      buf->eState = kNoDataReady;
+    } else {
+      buf->eState = kDataReady;
+    }
+    return;
+  }
+
   for (uint32_t i = 0; i < maxFrames; ++i) {
     
     if (v.pos >= static_cast<double>(v.endFrame)) {
@@ -261,6 +388,7 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
         v.pos = v.startFrame + std::fmod(v.pos - v.endFrame, static_cast<double>(v.endFrame - v.startFrame));
       } else {
         ended = true;
+        v.atEnd = true;      
         break;
       }
     }
@@ -301,6 +429,8 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
   }
 
   buf->uValidFrames = static_cast<uint16_t>(produced);
+  
+  ctl.posFrame.store(static_cast<uint64_t>(v.pos), std::memory_order_relaxed);
   if (ended && produced < maxFrames) {
     
     std::memset(out + static_cast<size_t>(produced) * frameBytes, 0, static_cast<size_t>(maxFrames - produced) * frameBytes);
@@ -310,7 +440,7 @@ void AudioFeed::Render(Voice& v, void* aBuffer) {
     buf->eState = kDataReady;
   }
   
-  const uint16_t slot = v.bound ? 0xFFFF : reg->SlotForPlayingId(v.playingId);
+  const uint16_t slot = engineSlot;
   if (slot != 0xFFFF) {
     if (uint32_t* p = reg->PositionForSlot(slot)) *p = static_cast<uint32_t>(v.pos);
   }
@@ -366,8 +496,20 @@ void __fastcall AudioFeed::Format(uint32_t aPlayingId, void* aFormat) {
 
 void AudioFeed::Stop(uint16_t aRow, float aFadeOut) {
   if (aRow >= kMaxRows) return;
+  
+  m_rows[aRow].startFrame.store(kNoStart, std::memory_order_relaxed);
   m_rows[aRow].stopFade.store(aFadeOut, std::memory_order_relaxed);
   m_rows[aRow].stopGen.fetch_add(1, std::memory_order_release);
+}
+
+void AudioFeed::SetStartFrame(uint16_t aRow, uint64_t aFrame) {
+  if (aRow >= kMaxRows) return;
+  m_rows[aRow].startFrame.store(aFrame, std::memory_order_release);
+}
+
+uint64_t AudioFeed::PositionFrame(uint16_t aRow) const {
+  if (aRow >= kMaxRows) return 0;
+  return m_rows[aRow].posFrame.load(std::memory_order_relaxed);
 }
 
 void AudioFeed::SetGain(uint16_t aRow, float aGain) {

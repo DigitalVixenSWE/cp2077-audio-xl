@@ -7,6 +7,10 @@ This software links the following third-party libraries, each under the MIT Lice
 - RedLib (cp2077-red-lib), Copyright (c) 2023 Pavel Siberx (psiberx).
 - RED4ext.SDK, Copyright (c) 2020 - present Octavian Dima (WopsS).
 
+It also includes `src/Duration.hpp`, vendored essentially unchanged from Spuddeh's Native Radio
+Framework (https://github.com/spuddeh/cp2077-native-radio-framework) under the MIT License,
+Copyright (c) 2026 Spuddeh, and used with his permission.
+
 and bundles these single-header decoders, used under their public domain / MIT-0 terms:
 
 - dr_mp3 and dr_flac (dr_libs), David Reid.

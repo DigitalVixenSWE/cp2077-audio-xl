@@ -4,6 +4,7 @@
 #include <RED4ext/RED4ext.hpp>
 #include <RedLib.hpp>
 
+#include "Attach.hpp"
 #include "AudioFeed.hpp"
 #include "Emitters.hpp"
 #include "Manifest.hpp"
@@ -14,6 +15,20 @@ namespace AudioXLNS {
 class AudioXLNative : public Red::IScriptable {
  public:
   static bool Available() { return SoundRegistry::Get()->Available(); }
+
+  static bool AttachEmitter(Red::CName aName, const Red::Handle<RED4ext::IScriptable>& aEntity) {
+    return AttachedEmitters::Get()->Attach(aName.ToString(), aEntity);
+  }
+  
+  static bool DetachEmitter(Red::CName aName) {
+    return AttachedEmitters::Get()->Detach(aName.ToString());
+  }
+  static bool IsEmitterAttached(Red::CName aName) {
+    return AttachedEmitters::Get()->IsAttached(aName.ToString());
+  }
+  static int32_t AttachedEmitterCount() { return AttachedEmitters::Get()->Count(); }
+  
+  static int32_t TickEmitters() { return AttachedEmitters::Get()->Tick(); }
 
   static Red::CString Status() { return Red::CString(SoundRegistry::Get()->Status().c_str()); }
 
@@ -72,7 +87,43 @@ class AudioXLNative : public Red::IScriptable {
     return row != 0xFFFF && AudioFeed::Get()->IsPlaying(row);
   }
 
+  static bool PlayFrom(Red::CName aName, float aSeconds) {
+    auto* reg = SoundRegistry::Get();
+    const uint16_t row = reg->RowFor(aName.ToString());
+    if (row == 0xFFFF) return false;
+    const RowFormat* fmt = reg->FormatForRow(row);
+    if (!fmt || fmt->sampleRate == 0) return false;
+    const double frames = static_cast<double>(aSeconds < 0.0f ? 0.0f : aSeconds) * fmt->sampleRate;
+    AudioFeed::Get()->SetStartFrame(row, static_cast<uint64_t>(frames));
+    return true;
+  }
+
+  static float Pause(Red::CName aName, float aFadeOut) {
+    auto* reg = SoundRegistry::Get();
+    const uint16_t row = reg->RowFor(aName.ToString());
+    if (row == 0xFFFF) return 0.0f;
+    const RowFormat* fmt = reg->FormatForRow(row);
+    if (!fmt || fmt->sampleRate == 0) return 0.0f;
+    auto* feed = AudioFeed::Get();
+    const uint64_t at = feed->PositionFrame(row);
+    feed->Stop(row, aFadeOut);          
+    feed->SetStartFrame(row, at);       
+    return static_cast<float>(static_cast<double>(at) / fmt->sampleRate);
+  }
+
+  static float Position(Red::CName aName) {
+    auto* reg = SoundRegistry::Get();
+    const uint16_t row = reg->RowFor(aName.ToString());
+    if (row == 0xFFFF) return 0.0f;
+    const RowFormat* fmt = reg->FormatForRow(row);
+    if (!fmt || fmt->sampleRate == 0) return 0.0f;
+    const uint64_t at = AudioFeed::Get()->PositionFrame(row);
+    return static_cast<float>(static_cast<double>(at) / fmt->sampleRate);
+  }
+
   static uint32_t WwiseId(Red::CName aName) { return WwiseHash(aName.ToString()); }
+
+  static bool Enabled() { return SoundRegistry::Get()->Enabled(); }
 
   static int32_t LoadBank(const Red::CString& aPath) {
     return SoundRegistry::Get()->LoadBank(aPath.c_str(), "script");
@@ -140,6 +191,10 @@ RTTI_DEFINE_CLASS(AudioXLNS::AudioXLNative, "AudioXLNative", {
   RTTI_METHOD(Stop);
   RTTI_METHOD(SetGain);
   RTTI_METHOD(IsPlaying);
+  RTTI_METHOD(PlayFrom);
+  RTTI_METHOD(Pause);
+  RTTI_METHOD(Enabled);
+  RTTI_METHOD(Position);
   RTTI_METHOD(LoadBank);
   RTTI_METHOD(RetryBanks);
   RTTI_METHOD(Duration);
@@ -158,6 +213,11 @@ RTTI_DEFINE_CLASS(AudioXLNS::AudioXLNative, "AudioXLNative", {
   RTTI_METHOD(DestroyAllEmitters);
   RTTI_METHOD(HasEmitter);
   RTTI_METHOD(EmitterCount);
+  RTTI_METHOD(AttachEmitter);
+  RTTI_METHOD(DetachEmitter);
+  RTTI_METHOD(IsEmitterAttached);
+  RTTI_METHOD(AttachedEmitterCount);
+  RTTI_METHOD(TickEmitters);
 });
 
 #endif  

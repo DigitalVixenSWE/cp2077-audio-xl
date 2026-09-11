@@ -8,6 +8,7 @@
 #include "AudioXLPlugin.hpp"
 #include "JsonLite.hpp"
 #include "SoundRegistry.hpp"
+#include "Stream.hpp"
 
 namespace AudioXLNS {
 
@@ -67,6 +68,7 @@ bool RowToSpec(const JsonValue& aRow, const fs::path& aDir, SoundSpec& aOut, std
   aOut.end = static_cast<float>(aRow.GetNumber("end", 0.0));
   aOut.rate = static_cast<float>(aRow.GetNumber("rate", 1.0));
   aOut.stream = aRow.GetBool("stream", false);
+  aOut.resume = aRow.GetBool("resume", false);
   aOut.maxDuration = static_cast<float>(aRow.GetNumber("maxDuration", 0.0));
   aOut.reverb = aRow.GetString("reverb");
   if (aOut.reverb == "None") aOut.reverb.clear();
@@ -117,6 +119,8 @@ int Manifest::LoadFile(SoundRegistry& aRegistry, const std::string& aPath) {
   aRegistry.Note("manifest " + modName + " (" + std::to_string(rows->arr.size()) + " rows)");
   int ok = 0;
   int failed = 0;
+  
+  const size_t streamedBefore = StreamPump::Get()->Count();
   for (const auto& rowIn : rows->arr) {
     
     std::vector<JsonValue> expanded;
@@ -154,7 +158,14 @@ int Manifest::LoadFile(SoundRegistry& aRegistry, const std::string& aPath) {
     }
     }
   }
-  plugin->Info("manifest " + modName + ": " + std::to_string(ok) + " registered, " + std::to_string(failed) + " failed/skipped");
+  
+  const size_t streamed = StreamPump::Get()->Count() - streamedBefore;
+  std::string line = "manifest " + modName + ": " + std::to_string(ok) + " registered, " +
+                     std::to_string(failed) + " failed/skipped";
+  if (streamed > 0) {
+    line += ", " + std::to_string(streamed) + " played from disk instead of held in memory";
+  }
+  plugin->Info(line);
   aRegistry.Note("manifest " + modName + ": " + std::to_string(ok) + " registered, " + std::to_string(failed) + " failed/skipped");
   return ok;
 }

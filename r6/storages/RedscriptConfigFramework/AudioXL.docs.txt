@@ -64,9 +64,10 @@ GameInstance.GetAudioSystem(gi).Play(n"mymod_step", npc.GetEntityID(), n"feet");
 [b]Rules of the registry[/b]
 [list]
 [*]A [b]new name[/b] is a new event. A [b]vanilla event name[/b] replaces that event's audio everywhere it plays: guns, footsteps, UI, anything. [b]mod_skip[/b] silences a vanilla event.[/*]
-[*]Formats: WAV (16 or 24-bit PCM), MP3, OGG, FLAC. WAVs are memory-mapped so a large set costs nothing until it plays; add
+[*]Formats: WAV (16 or 24-bit PCM), MP3, OGG, FLAC. WAVs are memory-mapped so a large set costs nothing until it plays.[/*]
+[*][b]Long compressed tracks stream from disk.[/b] MP3/OGG/FLAC used to be decoded whole at load but now anything 45 seconds or longer decodes as it plays instead. Force it either way with
 [code]"stream": true[/code]
-for long tracks.[/*]
+Three things a streamed row cannot do, and it stays fully in memory if you ask for any of them: [b]loop[/b], [b]start[/b]/[b]end[/b] regions, and [b]rate[/b]. It also plays [b]one sound at a time[/b] - posting it again restarts it rather than layering a second copy. If you want two copies at once, register the file under two names.[/*]
 [*]Names are global and first-registered wins. Prefix yours with your mod name.[/*]
 [*]Registry capacity is 4096 rows shared with REDmod.[/*]
 [/list]
@@ -75,11 +76,11 @@ for long tracks.[/*]
 [quote][code]name      the event name to post (required)
 type      the routing type, see below (default mod_sfx_2d)
 file      audio file, relative to the manifest (required unless type is mod_skip)
-gain      1.0 = as recorded          pitch     0 = as recorded    distance  0 = default
+gain      1.0 = as recorded          pitch     not applied yet, see below    distance  0 = default
 loop      true/false                 rate      playback rate, 0.5 = half speed, octave down
 fadeIn    seconds                    fadeOut   seconds, applied by AudioXLAPI.Stop
 start     seconds into the file      end       seconds, 0 = to the end
-stream    true = map the file, read it only when it plays
+stream    true = never hold the whole sound in memory
 maxDuration  seconds; the sound ends itself after this even when looping (fades with fadeOut)
 subtitle  text, or { "en-us": "...", "de-de": "..." }     speaker   name shown with the subtitle
 reverb    a revb_* aux bus, used when the row plays on an AudioXL emitter    reverbLevel  0..1 (default 1.0)[/code]
@@ -92,17 +93,59 @@ mod_sfx_low_occlusion, mod_sfx_room, mod_sfx_street, mod_sfx_city, mod_sfx_radio
 axl_voice_2d          dialogue mixer                       (Dialogue slider)
 axl_music_2d          music mixer                          (Music slider)
 axl_radio_2d          vehicle radio                        (Vehicle Radio slider)
+axl_radio_3d          vehicle radio, positioned            (Vehicle Radio slider)
+axl_radio_veh3d       vehicle radio, driver's seat         (Vehicle Radio slider)
 axl_sfx_2d, axl_master_2d
 mod_skip              mute the named vanilla event[/code]
 [/quote]
+[b]pitch[/b] is accepted but not applied yet - a row plays at its recorded pitch whatever you put there. Use [b]rate[/b] meanwhile: it resamples, so 0.5 is half speed and an octave down, which is the same thing the engine's own pitch property does. Applying [b]pitch[/b] as a shift in cents on top of [b]rate[/b] is planned for a future release.
+
 The [b]mod_sfx_*[/b] types are the game's own; the [b]axl_*[/b] types come with AudioXL. Every positioned type follows the game's own reverb zones when posted on an entity: nothing to set up.
+
+[b]A positioned type needs something to be positioned on.[/b] Post it with an entity - 
+[code]AudioSystem.Play(name, entityID, emitter)[/code]
+- or on an AudioXL emitter. Posted with a bare 
+[code]Play(name)[/code]
+it has no emitter and you will hear nothing. That applies to every [b]mod_sfx_occlusion/room/street/city[/b] and [b]mod_sfx_radio[/b] row as well as the two positioned radio types.
+
+[b]The two positioned radio types have a further limit worth knowing before you build on them.[/b] They are clones of the game's own radio sounds, so they inherit its attenuation. [b]axl_radio_3d[/b] sits on the world-radio bus, which the game drives per game object: it sounds on the player and on a vehicle the player owns, and is silent on an arbitrary NPC, a vending machine or a car you do not own, because the radio parameters the bus reads were never set on those objects. [b]axl_radio_veh3d[/b] is the driver's-seat bus - louder, and deliberately not attenuated, so it stays with the listener. Use [b]axl_radio_3d[/b] for a radio in a car the player is in or owns; for a sound at a place of your own choosing, an AudioXL emitter with its own reverb should be used.
 
 [b]Live control[/b], for sounds you registered:
 [quote][code]AudioXLAPI.Stop(n"mymod_pad", 3.0);      // fade out over 3 s; vanilla Stop does nothing for these
-AudioXLAPI.SetGain(n"mymod_pad", 0.5);   // while it plays
-AudioXLAPI.IsPlaying(n"mymod_pad");[/code]
+AudioXLAPI.SetGain(n"mymod_pad", 0.5);   // while it plays; overrides the manifest's gain
+AudioXLAPI.IsPlaying(n"mymod_pad");
+AudioXLAPI.Position(n"mymod_pad");       // seconds in, 0 when it is not playing[/code]
 [/quote]
 A looping sound plays until Stop is called, until its entity despawns, or until its [b]maxDuration[/b] runs out.
+
+[b]Pause and resume[/b]
+A track can carry on where it left off instead of starting again.
+[quote][code]AudioXLAPI.Pause(n"mymod_song");          // stops it, remembers where, returns that position
+AudioXLAPI.Play(n"mymod_song");           // carries on from there[/code]
+[/quote]
+If you use stop then everything is forgotten and a restart start from the beginning. Use [b]Pause[/b] and then [b]Play[/b] to continue off from where you were.
+
+To begin somewhere other than the start, set the offset and then post the row as you normally would - [b]PlayFrom[/b] only sets the offset, then you need to start it:
+[quote][code]AudioXLAPI.PlayFrom(n"mymod_song", 42.0);   // the NEXT voice on this row starts 42 s in
+AudioXLAPI.Play(n"mymod_song");[/code]
+[/quote]
+The offset is used by that one player and then cleared.. All of this works the same on a streamed row and one held in memory: a streamed row seeks its decoder, an in-memory row just starts further into the buffer.
+
+[b]Timing your registrations[/b]
+[quote][code]AudioXLNative.Available();   // AudioXL is installed and its addresses resolved
+AudioXLNative.Enabled();     // the custom-sound path is up and your rows have real engine slots[/code]
+[/quote]
+Registering is safe at any point - anything sent before the audio system exists is queued and flushed for you. But a row that is still queued has no engine slot yet, so [b]SetGain[/b], [b]Stop[/b], [b]Position[/b] and friends cannot resolve it. Wait for [b]Enabled[/b], not [b]Available[/b], before playing a row you have only just registered.
+
+[b]Which of the four do I want?[/b] Nearly every question I get is really this question.
+[quote][code]in the player's ears        2D row, plain Play(name)
+on something in the world   positioned row, Play(name, entityID, emitter)   <- follows a person or a device
+at a place of your own      positioned row, CreateEmitter + PlayOn          <- stays put at where it was created
+anything that moves fast       positioned row, AttachEmitter + PlayOn          <- follows anything[/code]
+[/quote]
+For a person, a door or a device, the second is the least work: no registration, no cleanup, no coordinates. Just use a plain emitter when there is no entity to hang the sound on, or when you want to choose the reverb yourself.
+
+[b]Vehicles are the exception.[/b] Posting on a car with the vanilla Play does not do what it looks like: on a car the player has never mounted you hear nothing at all, and on one you are driving the sound is placed once where the car was and rarely moves. That is the engine rather than AudioXL - there is no "attach a sound to an entity" anywhere in it that I've found. Position is written into an emitter, every frame, for emitters the engine owns; a traffic car's engine note tracks because the vehicle audio system rewrites it constantly. AttachEmitter does exactly that for an emitter AudioXL owns.
 
 [b]Emitters[/b]
 A sound at a place of your own. Nothing in the world needs to exist there: you give AudioXL a position, it gives the sound a Wwise object, and the sound stays put while you walk around it.
@@ -114,6 +157,27 @@ AudioXLAPI.StopOn(n"mymod_garage_compressor", n"mymod_compressor_loop", 2.0);   
 AudioXLAPI.DestroyEmitter(n"mymod_garage_compressor");[/code]
 [/quote]
 The rows you play on it should be a positioned type (mod_sfx_occlusion and friends); a 2D row on an emitter sits on the listener, as 2D does everywhere. Emitters are torn down at session end, so create them on Session/Ready. Creating a name that already exists moves it, and MoveEmitter moves it while it plays.
+
+[b]An emitter is a place, not a thing.[/b] It's really easier to think of it as a place in space rather than a thing. It stays where you put it and does not follow anything, so it is the wrong tool for a sound on something that moves. For a person or a device, post the sound on the entity with the vanilla Play instead - here, a ringing phone on an NPC:
+[quote][code]GameInstance.GetAudioSystem(gi).Play(n"mymod_phone_ring", npc.GetEntityID(), n"phone");[/code]
+[/quote]
+The entity is already a Wwise object, so the sound follows it for free, walls occlude it, it picks up the reverb of wherever it happens to be, and it ends by itself when the entity despawns. [b]A vehicle is the exception - see below.[/b] [b]AudioXLAPI.Stop[/b] and [b]SetGain[/b] still work on it: they act on the row, whoever posted it.
+
+[b]Emitters that follow something[/b]
+A sound glued to a car, an NPC, a drone - anything that moves:
+[quote][code]AudioXLAPI.AttachEmitter(n"mymod_alarm", vehicle);          // a ref<GameObject>
+AudioXLAPI.PlayOn(n"mymod_alarm", n"mymod_alarm_loop");[/code]
+[/quote]
+AttachEmitter creates the emitter at the entity if it is not there yet, so one call takes you from nothing to a sound that travels. It keeps its own reverb like any AudioXL emitter.
+
+[b]When the entity despawns the emitter goes with it and the sound stops[/b], so in the normal case there is nothing to clean up.
+[quote][code]AudioXLAPI.DetachEmitter(n"mymod_alarm");                   // stops following, keeps playing where it was stopped
+AudioXLAPI.StopOn(n"mymod_alarm", n"", 2.0);                // stops the sound, fade 2 s
+AudioXLAPI.DestroyEmitter(n"mymod_alarm");                  // and take the emitter away[/code]
+[/quote]
+Detaching leaves the emitter where it was, still playing. Use StopOn to turn it off.
+
+AudioXL moves every attached emitter on one shared tick, so thirty of them cost no more script time than one, and nothing ticks at all while nothing is attached.
 
 [b]Emitters with reverb[/b]
 The game reverberates every sound by the zone its emitter stands in. So the emitter can carry a reverb of its own (if played through AudioXLAPI instead of regular game Play): any of the game's reverb buses, at a level you choose.
@@ -131,7 +195,7 @@ Rows played through the vanilla Play ignore the row's reverb.
 
 [b]Which route[/b]
 [list]
-[*][b]On an entity[/b], with the vanilla Play and an occlusion type: the sound sits in whatever reverb zone the entity stands in and walls occlude it. The game decides how wet. Best for an NPC, vehicle or a device already in the world.[/*]
+[*][b]On an entity[/b], with the vanilla Play and an occlusion type: the sound sits in whatever reverb zone the entity stands in and walls occlude it. The game decides how wet. Best for an NPC or a device already in the world; a vehicle needs AttachEmitter instead.[/*]
 [*][b]On an AudioXL emitter[/b]: your position, your reverb, your level. No occlusion and no zone reverb.[/*]
 [/list]
 
@@ -161,6 +225,20 @@ Does the same as a manifest row, from your own OnLoad.
 
 [color=#e06666][size=6][b]- For Mod Authors: metadata records -[/b][/size][/color]
 
+[b]Where this code goes.[/b] AudioXL is a redscript API, so it is called from a .reds file in
+[code]r6/scripts/YourMod/[/code]
+So it cannot be called from CET Lua. AudioXL needs no CET at all. A whole registration file looks like this, and this is the entire skeleton:
+[quote][code]module YourMod
+
+import AudioXL.*
+
+public class YourModAudio extends ScriptableService {
+  private cb func OnLoad() {
+    AudioXLAPI.Register("Your Mod", r"yourmod\\sound\\metadata\\records.audio_metadata");
+  }
+}[/code]
+[/quote]
+
 Footwear sets, weapon sound assignments, vehicle engines, ambients: all of that lives in the cooked audio metadata, and AudioXL merges yours in instead of replacing the file.
 
 [b]Adding records[/b]: grab the [b]Starter Metadata[/b] optional download on this page, a complete footwear set of 19 records with its list-on pairs. Open its
@@ -169,11 +247,34 @@ In WolvenKit, rename the records, point them at your sounds, save it at your own
 [quote][code]AudioXLAPI.Register("My Mod", r"mymod\\sound\\metadata\\records.audio_metadata",
                     ["lcm_footsteps_concrete=lcm_concrete_mymod"]);[/code]
 [/quote]
-The list pairs put a footwear record on a material; a footwear record is inert until it is listed.
+That example is the footwear shape, and footwear is the exception: nothing in the game references a footwear record until you say which material it belongs to, so it stays silent until it is listed. Everything else - a vehicle, weapon, ambient or engine record - is found through its own references, so registering the resource is the whole job and there is no list at all:
+[quote][code]AudioXLAPI.Register("Hozuki Frigate", r"blu\\blu_hozuki_frigate\\records.audio_metadata");[/code]
+[/quote]
+[b]Leave the list argument out entirely unless it is footwear.[/b] Each pair must read
+[code]vanilla_material=your_record[/code]
+A bare name with no "=" lists nothing; AudioXL says so in its log rather than failing quietly.
 
 [b]Editing vanilla records[/b]: subclass
 [code]AudioXLPatcher[/code]
 Edit typed fields in Apply, register it. Phantom Liberty keeps its records in a second metadata resource, so those edits go in ApplyEP1 instead; it is skipped when EP1 is not installed. A generator is included for the common case: point it at a modified metadata export and it writes the patcher for you.
+
+[b]Patching the metadata yourself, without AudioXL?[/b] Then read this, because it will save you a bug
+report or two.
+
+[code]Resource/Load[/code]
+or
+[code]Resource/Loaded[/code]
+callback only fires when the resource actually loads. If anything pulled the cooked metadata into the depot before your service registered, that event never comes, your callback never runs, and your edits silently do nothing. AudioXL asks the depot for that resource during its own load so that its patchers cannot lose that race, which makes it likelier that a mod registering afterwards loses it. Do what AudioXL does and treat the event as the fast path and use a token:
+[quote][code]let t = GameInstance.GetResourceDepot()
+  .LoadResource(r"base\\sound\\metadata\\cooked_metadata.audio_metadata");
+if IsDefined(t) {
+  ArrayPush(this.m_tokens, t);      // hold the token or the callback may never arrive
+  t.RegisterCallback(this, n"OnMetadataReady");
+}[/code]
+[/quote]
+Make the work safe to run twice, since both routes can deliver. A token callback lands after post-load, which is fine for record edits (the game reads those live) but too late for anything the audio manager snapshots as it ingests. Phantom Liberty keeps its own records in a second resource at
+[code]ep1\\sound\\metadata\\cooked_metadata.audio_metadata[/code]
+so take a token for that one too; a null token there just means EP1 is not installed.
 
 [b]Reverb records[/b] are ordinary metadata too. The 22 [b]audioDynamicReverbSettings[/b] (revb_interior_warehouse, revb_interior_room_small, ...) and the 45 acoustic zones ([b]audioAcousticZoneMetadata[/b], amb_tag_int_*) sit in the same cooked metadata: a patcher retunes a vanilla reverb (bus names, maxDistance, crossovers), a contribution adds new ones. Leave the zone's [b]parameters[/b] array alone from script.
 
@@ -204,15 +305,62 @@ Migrating Audioware mods should be fairly easy:
 [list]
 [*]The YAML manifest becomes a sounds.json. [b]sfx[/b] entries are rows with a gain; [b]volume[/b] becomes [b]gain[/b], [b]loop[/b] stays [b]loop[/b], fade tweens become [b]fadeIn[/b] / [b]fadeOut[/b]. mp3, ogg and flac files stay as they are.[/*]
 [*][b]voices[/b] with fem / male takes become one row with a gendered [b]file[/b] and a [b]subtitle[/b]; the mute placeholder files go away. Play them with AudioXLAPI.PlayLine.[/*]
-[*]Spatial emitters on an entity need no registration. Post the sound on the entity with the vanilla AudioSystem.Play(name, entityID, emitterName) and give the row an occlusion type; the vehicle or NPC is already a Wwise object, and the sound ends when it despawns. An emitter at a bare position, or with a reverb of its own, is AudioXLAPI.CreateEmitter + PlayOn.[/*]
+[*]Spatial emitters on an NPC or a device need no registration. Post the sound on the entity with the vanilla AudioSystem.Play(name, entityID, emitterName) and give the row an occlusion type; that entity is already a Wwise object, and the sound ends when it despawns. [b]A vehicle is the exception[/b]: use AudioXLAPI.AttachEmitter, which is the closest thing to Audioware's RegisterEmitter. An emitter at a bare position, or with a reverb of its own, is AudioXLAPI.CreateEmitter + PlayOn.[/*]
 [*]reverb_mix and the presets: the game does zone reverb on its own for anything on an entity; a chosen reverb is SetEmitterReverb on an AudioXL emitter; underwater is the vanilla g_underwater_depth parameter.[/*]
 [*]Stop is AudioXLAPI.Stop(name, fadeOut); live volume is AudioXLAPI.SetGain.[/*]
 [*]Gate your calls on @if(ModuleExists("AudioXL")).[/*]
 [/list]
 
+[b]Where the files go.[/b] Everything under r6/audioware moves; the folder itself goes away:
+[quote][code]r6/audioware/YourMod/YourMod.yaml   ->  red4ext/plugins/AudioXL/sounds/YourMod/sounds.json
+r6/audioware/YourMod/*.wav          ->  red4ext/plugins/AudioXL/sounds/YourMod/*.wav[/code]
+[/quote]
+
+[b]Delete your emitter lifecycle code.[/b] Audioware wants you to register an emitter, remember it, stop sounds on it and unregister it when the entity goes away; mods carry a whole cleanup module for that. AudioXL needs none of that bookkeeping. On an NPC or a device, post the sound on the entity and the engine takes care of the lifecycle:
+[quote][code]// before: register, play, stop, unregister, plus a token to cancel the delayed cleanup
+// after:
+GameInstance.GetAudioSystem(gi).Play(n"mymod_beep", device.GetEntityID(), n"beep");[/code]
+[/quote]
+It follows the entity, walls occlude it, it takes the reverb of wherever that entity is, and it stops itself on despawn. There is nothing to clean up because nothing was registered.
+
+[b]If the sound belongs on a vehicle, that is the one case this does not cover[/b]
+
+AttachEmitter is the replacement for RegisterEmitter:
+[quote][code]AudioXLAPI.AttachEmitter(n"mymod_alarm", vehicle);
+AudioXLAPI.PlayOn(n"mymod_alarm", n"mymod_alarm_loop");[/code]
+[/quote]
+Same deal on cleanup: when the vehicle despawns the emitter goes with it.
+
+[b]Keeping the mod working without AudioXL.[/b] Put the calls behind a guard and give the fallback the vanilla path:
+[quote][code]@if(ModuleExists("AudioXL"))
+import AudioXL.*
+
+@if(ModuleExists("AudioXL"))
+public static func Stop(sound: CName) -> Void {
+  AudioXLAPI.Stop(sound, 0.0);
+}
+
+@if(!ModuleExists("AudioXL"))
+public static func Stop(sound: CName) -> Void {
+}[/code]
+[/quote]
+
+[b]Two row recipes worth stealing[/b], both from a real conversion of a vehicle mod:
+[list]
+[*][b]One sound, inside and outside the car.[/b] Register the same file twice, 2D and positioned, then pick in script by whether the player is mounted. The 2D one sits in your ears in the driver's seat; the positioned one is out at the car when you are stood next to it.
+[code]{ "name": "vss_door_open",    "type": "mod_sfx_2d",            "file": "vss_door_open.wav" },
+{ "name": "vss_door_open_3d", "type": "mod_sfx_low_occlusion", "file": "vss_door_open.wav" }[/code][/*]
+[*][b]One file at several volumes.[/b] A parking sensor that gets louder as you close in is three rows over one file, not three files. Registering a file more than once is free: AudioXL keeps one copy of the audio and the rows share it.
+[code]{ "name": "vss_parking_far",  "type": "mod_sfx_2d", "file": "vss_parking.wav", "gain": 0.55 },
+{ "name": "vss_parking_mid",  "type": "mod_sfx_2d", "file": "vss_parking.wav", "gain": 0.8  },
+{ "name": "vss_parking_near", "type": "mod_sfx_2d", "file": "vss_parking.wav", "gain": 1.0  }[/code][/*]
+[/list]
+
 
 [color=#e06666][size=6][b]- Updates -[/b][/size][/color]
 
+[i][u]0.3.1[/u][/i] - New: AudioXLAPI.AttachEmitter. Needed to attach emitters to a moving vehicle, and possibly other entities too. Also new: "resume": true on a row, so a sound stopped part way through starts from there next time instead of the beginning. Fixed: a sound the game had stopped could keep playing unheard.
+[i][u]0.3.0[/u][/i] - Long tracks now stream from disk. Pause a sound and resume added. Two positioned radio types (axl_radio_3d, axl_radio_veh3d) for objects which support it. Fixed: a manifest's gain was accepted and then ignored.
 [i][u]0.2.0[/u][/i] - AudioXL emitters: a sound at a position of your own with a reverb of your own.
 [i][u]0.1.4[/u][/i] - Repackage. The 0.1.2 and 0.1.3 accidentally got the wrong plugin, but no functional difference.
 [i][u]0.1.3[/u][/i] - Patchers reach Phantom Liberty records through ApplyEP1. Generator takes an EP1 pair and an exclude list. Fixed a startup crash: one engine address hash is shared by two different symbols, so it now prefers the known address on 2.31 and warns when the two disagree.
@@ -228,6 +376,7 @@ Migrating Audioware mods should be fairly easy:
 [*]Rows are read once at audio init. Adding a manifest needs a restart; script registration works any time.[/*]
 [*]Some sounds will not play at main menu, specifically those going via sfx bus.[/*]
 [*]Sounds on an AudioXL emitter get no occlusion and no zone reverb; that is the trade for a reverb of your own. Use the vanilla Play on an entity when you want the game's acoustics.[/*]
+[*]The vanilla Play on an entity is silent on a vehicle the player has never mounted, and does not keep up with one that is moving. That is an engine limitation and the fix is AudioXL AttachEmitter.[/*]
 [/list]
 
 
@@ -238,6 +387,8 @@ The full source, plugin and scripts, is on GitHub: [url=https://github.com/Digit
 [color=#e06666][size=6][b]- Credits -[/b][/size][/color]
 
 [url=https://www.nexusmods.com/profile/psiberx]psiberx[/url] for [url=https://www.nexusmods.com/cyberpunk2077/mods/7780]Codeware[/url] and for pointing at the Resource/Load callback. [url=https://www.nexusmods.com/cyberpunk2077/mods/17542]The Loudening[/url]'s author [url=https://www.nexusmods.com/profile/notjasonlee]notjasonlee[/url] and [url=https://www.nexusmods.com/profile/MisterChedda]MisterChedda[/url]'s "[url=https://www.nexusmods.com/cyberpunk2077/mods/16436]Ah shit, here we go again[/url]" for being the two mods this was tested against.
+
+[url=https://www.nexusmods.com/profile/Spuddeh]Spuddeh[/url] for the audio-length reader AudioXL uses to measure a track without decoding it, and for finding a few issues for me to fix!
 
 Thank you to all the wonderful mod authors who continue to create content for us all to enjoy for free!
 

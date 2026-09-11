@@ -8,6 +8,7 @@
 #include "Config.h"
 #include "Emitters.hpp"
 #include "SoundRegistry.hpp"
+#include "Stream.hpp"
 
 namespace AudioXLNS {
 

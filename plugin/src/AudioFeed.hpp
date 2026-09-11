@@ -7,6 +7,8 @@
 
 namespace AudioXLNS {
 
+class StreamRow;
+
 class AudioFeed {
  public:
   static AudioFeed* Get();
@@ -17,6 +19,10 @@ class AudioFeed {
   void Stop(uint16_t aRow, float aFadeOut);
   void SetGain(uint16_t aRow, float aGain);
   bool IsPlaying(uint16_t aRow) const;
+
+  void SetStartFrame(uint16_t aRow, uint64_t aFrame);
+  
+  uint64_t PositionFrame(uint16_t aRow) const;
 
   bool Bind(uint32_t aPlayingId, uint16_t aRow);
   void Unbind(uint32_t aPlayingId);
@@ -45,6 +51,11 @@ class AudioFeed {
     double rate = 1.0;
     double fadeInFrames = 0.0;
     uint64_t maxFrames = 0;      
+    StreamRow* stream = nullptr; 
+    uint32_t dry = 0;            
+    bool evict = false;          
+    bool sawSlot = false;        
+    bool atEnd = false;          
     bool bound = false;          
     uint32_t bindStopGen = 0;    
   };
@@ -61,7 +72,12 @@ class AudioFeed {
     std::atomic<float> stopFade{0.0f};
     std::atomic<float> gain{1.0f};
     std::atomic<uint32_t> live{0};
+    
+    std::atomic<uint64_t> startFrame{kNoStart};
+    std::atomic<uint64_t> posFrame{0};
   };
+
+  static constexpr uint64_t kNoStart = ~0ull;
 
   Voice* Find(uint32_t aPlayingId);
   Voice* Start(uint32_t aPlayingId, uint16_t aRow, bool aBound);

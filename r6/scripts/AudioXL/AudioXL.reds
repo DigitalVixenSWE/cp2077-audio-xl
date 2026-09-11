@@ -55,6 +55,13 @@ public native class AudioXLNative extends IScriptable {
   public static native func Stop(name: CName, fadeOut: Float) -> Bool
   public static native func SetGain(name: CName, gain: Float) -> Bool
   public static native func IsPlaying(name: CName) -> Bool
+  
+  public static native func PlayFrom(name: CName, seconds: Float) -> Bool
+  public static native func Position(name: CName) -> Float            
+  
+  public static native func Pause(name: CName, fadeOut: Float) -> Float
+  
+  public static native func Enabled() -> Bool
   public static native func WwiseId(name: CName) -> Uint32  
   
   public static native func LoadBank(path: String) -> Int32
@@ -68,6 +75,12 @@ public native class AudioXLNative extends IScriptable {
   
   public static native func CreateEmitter(name: CName, x: Float, y: Float, z: Float) -> Bool
   public static native func MoveEmitter(name: CName, x: Float, y: Float, z: Float) -> Bool
+  
+  public static native func AttachEmitter(name: CName, entity: ref<GameObject>) -> Bool
+  public static native func DetachEmitter(name: CName) -> Bool
+  public static native func IsEmitterAttached(name: CName) -> Bool
+  public static native func AttachedEmitterCount() -> Int32
+  public static native func TickEmitters() -> Int32
   public static native func SetEmitterReverb(name: CName, bus: CName, level: Float) -> Bool   
   public static native func PlayOn(emitter: CName, sound: CName) -> Bool
   public static native func StopOn(emitter: CName, sound: CName, fadeOut: Float) -> Bool      
@@ -192,6 +205,18 @@ public abstract class AudioXLAPI {
     return AudioXLNative.IsPlaying(name);
   }
 
+  public static func PlayFrom(name: CName, seconds: Float) -> Bool {
+    return AudioXLNative.PlayFrom(name, seconds);
+  }
+
+  public static func Position(name: CName) -> Float {
+    return AudioXLNative.Position(name);
+  }
+
+  public static func Pause(name: CName, opt fadeOut: Float) -> Float {
+    return AudioXLNative.Pause(name, fadeOut);
+  }
+
   public static func Mute(modName: String, name: CName) -> Bool {
     let ok: Bool = AudioXLNative.Mute(name);
     let sys = AudioXLSystem.Get();
@@ -204,6 +229,22 @@ public abstract class AudioXLAPI {
   public static func CreateEmitter(name: CName, pos: Vector4) -> Bool {
     return AudioXLNative.CreateEmitter(name, pos.X, pos.Y, pos.Z);
   }
+  
+  public static func AttachEmitter(name: CName, entity: ref<GameObject>) -> Bool {
+    if !IsDefined(entity) { return false; }
+    let ok: Bool = AudioXLNative.AttachEmitter(name, entity);
+    if ok { AudioXLFollow.Wake(); }
+    return ok;
+  }
+
+  public static func DetachEmitter(name: CName) -> Bool {
+    return AudioXLNative.DetachEmitter(name);
+  }
+
+  public static func IsEmitterAttached(name: CName) -> Bool {
+    return AudioXLNative.IsEmitterAttached(name);
+  }
+
   public static func MoveEmitter(name: CName, pos: Vector4) -> Bool {
     return AudioXLNative.MoveEmitter(name, pos.X, pos.Y, pos.Z);
   }
@@ -277,9 +318,26 @@ public class AudioXLSystem extends ScriptableService {
     let t = GameInstance.GetResourceDepot().LoadResource(c.resourcePath);
     if IsDefined(t) {
       ArrayPush(this.m_tokens, t);
+      
+      t.RegisterCallback(this, n"OnContributionReady");
     } else {
       this.Note(s"  '\(c.modName)': LoadResource returned nothing - is the archive installed?");
     }
+  }
+
+  private cb func OnContributionReady(token: ref<ResourceToken>) -> Void {
+    let c = this.MatchContribution(token.GetPath());
+    if !IsDefined(c) || IsDefined(c.resource) {
+      return;   
+    }
+    let res = token.GetResource() as audioCookedMetadataResource;
+    if !IsDefined(res) {
+      this.Note(s"  '\(c.modName)': resource did not load - is the archive installed?");
+      return;
+    }
+    c.resource = res;
+    this.Note(s"'\(c.modName)': contribution loaded (late path), \(ArraySize(res.entries)) entries");
+    this.SpliceReady();
   }
 
   private cb func OnLoad() {
@@ -309,6 +367,9 @@ public class AudioXLSystem extends ScriptableService {
     this.AddEvent(n"axl_sfx_2d", AudioXLNative.WwiseId(n"axl_sfx_2d"));
     this.AddEvent(n"axl_master_2d", AudioXLNative.WwiseId(n"axl_master_2d"));
     this.AddEvent(n"axl_radioport_2d", AudioXLNative.WwiseId(n"axl_radioport_2d"));
+    
+    this.AddEvent(n"axl_radio_3d", AudioXLNative.WwiseId(n"axl_radio_3d"));
+    this.AddEvent(n"axl_radio_veh3d", AudioXLNative.WwiseId(n"axl_radio_veh3d"));
 
     let t = GameInstance.GetResourceDepot()
       .LoadResource(r"base\\sound\\metadata\\cooked_metadata.audio_metadata");
@@ -600,6 +661,11 @@ public class AudioXLSystem extends ScriptableService {
         } else {
           this.Note(s"  '\(c.modName)': material \(matName) not found");
         }
+      } else {
+        
+        this.Note(s"  '\(c.modName)': listOn entry '\(pair)' is not a pair - it must read " +
+                  s"vanilla_material=your_record (e.g. lcm_footsteps_concrete=lcm_concrete_mine). " +
+                  s"Only footwear records need listOn; leave it out for anything else.");
       }
       i += 1;
     }
@@ -732,4 +798,56 @@ public class AudioXLConsoleHook extends ScriptableService {
   private cb func OnSessionReady(event: ref<GameSessionEvent>) -> Void {
     RedConsoleAPI.Register(GetGameInstance(), new AudioXLStatusCmd());
   }
+}
+
+public class AudioXLFollowTick extends DelayCallback {
+  public func Call() -> Void {
+    AudioXLFollow.Run();
+  }
+}
+
+public class AudioXLFollow extends ScriptableService {
+  private let m_running: Bool;
+
+  public final static func Get() -> ref<AudioXLFollow> {
+    return GameInstance.GetScriptableServiceContainer().GetService(n"AudioXL.AudioXLFollow") as AudioXLFollow;
+  }
+
+  public final static func Wake() -> Void {
+    let self = AudioXLFollow.Get();
+    if IsDefined(self) { self.Start(); }
+  }
+
+  public final static func Run() -> Void {
+    let self = AudioXLFollow.Get();
+    if IsDefined(self) { self.Step(); }
+  }
+
+  private func Start() -> Void {
+    if this.m_running { return; }
+    this.m_running = true;
+    this.Arm();
+  }
+
+  private func Arm() -> Void {
+    let gi = GetGameInstance();
+    let delay = GameInstance.GetDelaySystem(gi);
+    if !IsDefined(delay) {
+      
+      this.m_running = false;
+      return;
+    }
+    GameInstance.GetDelaySystem(gi).DelayCallback(new AudioXLFollowTick(), AudioXLFollow.Interval());
+  }
+
+  private func Step() -> Void {
+    if AudioXLNative.AttachedEmitterCount() <= 0 {
+      this.m_running = false;     
+      return;
+    }
+    AudioXLNative.TickEmitters();
+    this.Arm();
+  }
+
+  public final static func Interval() -> Float { return 0.033; }
 }
